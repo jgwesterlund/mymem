@@ -1,6 +1,8 @@
-import { app, ipcMain, globalShortcut } from 'electron'
+import { app, globalShortcut } from 'electron'
 import { createMainWindow, getMainWindow } from './windows/mainWindow'
-import { toggleQuickCapture, hideQuickCapture } from './windows/quickCapture'
+import { toggleQuickCapture } from './windows/quickCapture'
+import { registerIpcHandlers } from './ipc/handlers'
+import { closeDb } from './db/connection'
 import { runSmoke } from './smoke'
 
 // Smoke mode: verify native/ESM deps load inside Electron, then exit. No windows.
@@ -26,11 +28,10 @@ if (process.env.MYMEM_SMOKE) {
     })
 
     void app.whenReady().then(() => {
-      registerIpc()
+      registerIpcHandlers()
       createMainWindow()
 
-      // Quick capture spike (M0): verify type:'panel' behavior early.
-      // Default hotkey; becomes a setting with plain-text override later.
+      // Quick capture spike (M0): becomes a setting with plain-text override later.
       globalShortcut.register('Control+Command+Space', () => {
         toggleQuickCapture()
       })
@@ -40,32 +41,12 @@ if (process.env.MYMEM_SMOKE) {
       if (!getMainWindow()) createMainWindow()
     })
 
-    // mem-style: app lives until explicitly quit; closing the window keeps it in the dock.
-    app.on('window-all-closed', () => {
-      /* keep running — quick capture must work with the main window closed */
-    })
+    // mem-style: app lives until explicitly quit; quick capture works with the window closed.
+    app.on('window-all-closed', () => {})
 
     app.on('will-quit', () => {
       globalShortcut.unregisterAll()
+      closeDb()
     })
   }
-}
-
-function registerIpc(): void {
-  ipcMain.handle('app:ping', () => ({
-    ok: true as const,
-    version: app.getVersion(),
-    electron: process.versions.electron ?? 'unknown',
-    node: process.versions.node ?? 'unknown'
-  }))
-
-  // M0 stub — M1 wires this to the notes repo + indexer and emits data:changed.
-  ipcMain.handle('capture:save', (_event, payload: { text: string }) => {
-    console.log('[capture:save] stub, received', payload.text.length, 'chars')
-    return { noteId: null }
-  })
-
-  ipcMain.handle('capture:hide', () => {
-    hideQuickCapture()
-  })
 }
