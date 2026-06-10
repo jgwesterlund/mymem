@@ -1,0 +1,5 @@
+- [ ] Unchecked task
+- [x] Checked task
+- [ ] Parent task
+  - [x] Nested done
+  - [ ] Nested todo

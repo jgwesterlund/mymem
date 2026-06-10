@@ -60,7 +60,10 @@ export function registerIpcHandlers(): void {
     return note
   })
   typedHandle('notes:update', ({ id, patch, baseUpdatedAt }) => {
-    const res = s.notes.update(id, patch, baseUpdatedAt)
+    // This channel is only reachable from the renderer (= the user typing), so a title
+    // edit pins title_source to 'user'. AI titling (M8) writes through the repo directly.
+    const repoPatch = patch.title !== undefined ? { ...patch, titleSource: 'user' as const } : patch
+    const res = s.notes.update(id, repoPatch, baseUpdatedAt)
     if (!res.conflict) emitDataChanged({ entity: 'note', ids: [id], op: 'update', origin: 'user' })
     return res
   })

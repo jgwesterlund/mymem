@@ -1,7 +1,9 @@
-import { app, globalShortcut } from 'electron'
+import { app, globalShortcut, nativeTheme } from 'electron'
 import { createMainWindow, getMainWindow } from './windows/mainWindow'
 import { toggleQuickCapture } from './windows/quickCapture'
 import { registerIpcHandlers } from './ipc/handlers'
+import { push } from './ipc/registry'
+import { buildAppMenu } from './menu'
 import { closeDb } from './db/connection'
 import { runSmoke } from './smoke'
 
@@ -29,7 +31,14 @@ if (process.env.MYMEM_SMOKE) {
 
     void app.whenReady().then(() => {
       registerIpcHandlers()
+      buildAppMenu()
       createMainWindow()
+
+      // System appearance → renderer .dark class (initial push: did-finish-load
+      // in mainWindow.ts — full dark-mode QA stays M9).
+      nativeTheme.on('updated', () => {
+        push('theme:changed', { dark: nativeTheme.shouldUseDarkColors })
+      })
 
       // Quick capture spike (M0): becomes a setting with plain-text override later.
       globalShortcut.register('Control+Command+Space', () => {

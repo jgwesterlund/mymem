@@ -2,6 +2,18 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'node:path'
+import type { Plugin } from 'vite'
+
+/** Dev server only: allow the Vite HMR websocket (default-src 'self' blocks ws:). Prod stays strict. */
+function relaxCspForDev(): Plugin {
+  return {
+    name: 'relax-csp-for-dev',
+    apply: 'serve',
+    transformIndexHtml(html) {
+      return html.replace("default-src 'self';", "default-src 'self'; connect-src 'self' ws: http:;")
+    }
+  }
+}
 
 export default defineConfig({
   main: {
@@ -31,7 +43,7 @@ export default defineConfig({
     }
   },
   renderer: {
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), relaxCspForDev()],
     resolve: {
       alias: {
         '@shared': resolve('src/shared'),

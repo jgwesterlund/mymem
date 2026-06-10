@@ -80,6 +80,7 @@ export function createNotesRepo(db: Database.Database) {
     ): { updatedAt: number; conflict?: boolean } {
       const row = getById.get(id) as NoteRow | undefined
       if (!row) throw new Error(`note not found: ${id}`)
+      if (row.trashed_at !== null) throw new Error(`note is trashed: ${id}`)
       if (baseUpdatedAt !== undefined && row.updated_at !== baseUpdatedAt) {
         return { updatedAt: row.updated_at, conflict: true }
       }

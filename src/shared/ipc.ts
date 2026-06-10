@@ -55,6 +55,16 @@ export type CommandId =
   | 'export-note'
   | 'import-files'
   | 'view-history'
+  // Cmd+1–9 tab activation goes through the native menu like every other shortcut
+  | 'activate-tab-1'
+  | 'activate-tab-2'
+  | 'activate-tab-3'
+  | 'activate-tab-4'
+  | 'activate-tab-5'
+  | 'activate-tab-6'
+  | 'activate-tab-7'
+  | 'activate-tab-8'
+  | 'activate-tab-9'
 
 export interface IpcInvokeMap {
   'app:ping': {

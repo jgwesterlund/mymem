@@ -1,5 +1,6 @@
-import { BrowserWindow, shell } from 'electron'
+import { BrowserWindow, nativeTheme, shell } from 'electron'
 import { join } from 'node:path'
+import type { IpcPushMap } from '@shared/ipc'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -28,6 +29,13 @@ export function createMainWindow(): BrowserWindow {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
+  })
+
+  // Initial theme push — the renderer subscribes to theme:changed but only main
+  // knows nativeTheme; updates are broadcast from index.ts.
+  mainWindow.webContents.on('did-finish-load', () => {
+    const payload: IpcPushMap['theme:changed'] = { dark: nativeTheme.shouldUseDarkColors }
+    mainWindow?.webContents.send('theme:changed', payload)
   })
 
   // External links open in the default browser, never inside the app.
