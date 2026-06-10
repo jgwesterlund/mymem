@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   INVOKE_CHANNELS,
   PUSH_CHANNELS,
@@ -25,6 +25,11 @@ const api = {
     return () => {
       ipcRenderer.removeListener(channel, listener)
     }
+  },
+  /** Drag-and-drop import: sandboxed renderers have no File.path (Electron 32+),
+   *  so the absolute path comes from webUtils via the bridge — NOT an IPC channel. */
+  pathForFile(file: File): string {
+    return webUtils.getPathForFile(file)
   }
 }
 

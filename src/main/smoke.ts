@@ -51,7 +51,7 @@ export async function runSmoke(): Promise<number> {
 
 /** M1: exercise migrations + repos end-to-end against a throwaway DB file. */
 async function smokeDataSpine(): Promise<void> {
-  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
   const { join } = await import('node:path')
   const { tmpdir } = await import('node:os')
 
@@ -126,6 +126,114 @@ async function smokeDataSpine(): Promise<void> {
     if (ahead.length < 2) throw new Error('typeahead substring match missing')
 
     console.log('[smoke] search spine OK — chunker, hash-diff indexer, FTS keyword + <mark>, instant trash, collection filter, typeahead')
+
+    // ── M4: session-snapshot policy (injectable clock) + restore roundtrip ──
+    const { createVersionsService } = await import('./services/versionsService')
+    let clock = Date.now()
+    const versionsService = createVersionsService(dbi, { notes, versions }, () => clock)
+    const vn = notes.create({ title: 'Versioned', contentMd: 'alpha bravo' })
+
+    versionsService.onContentEdit(vn.id) // first content edit since launch
+    notes.update(vn.id, { contentMd: 'alpha charlie' })
+    let vlist = versions.list(vn.id)
+    if (vlist.length !== 1) throw new Error('first content edit did not snapshot')
+    if (vlist[0]!.kind !== 'session') throw new Error('snapshot kind is not session')
+    if (versions.get(vlist[0]!.id)!.contentMd !== 'alpha bravo') throw new Error('snapshot is not the PRE-edit state')
+
+    clock += 1000 // autosave cadence — still the same editing session
+    versionsService.onContentEdit(vn.id)
+    notes.update(vn.id, { contentMd: 'alpha delta' })
+    if (versions.list(vn.id).length !== 1) throw new Error('same-session edit must not snapshot')
+
+    clock += 16 * 60 * 1000 // > 15 min idle → new session
+    versionsService.onContentEdit(vn.id)
+    notes.update(vn.id, { contentMd: 'alpha echo' })
+    vlist = versions.list(vn.id)
+    if (vlist.length !== 2) throw new Error('post-idle edit did not snapshot')
+    if (versions.get(vlist[0]!.id)!.contentMd !== 'alpha delta') throw new Error('second snapshot has wrong pre-edit state')
+
+    notes.update(vn.id, { title: 'Versioned note' }) // title-only: the handler never calls onContentEdit
+    if (versions.list(vn.id).length !== 2) throw new Error('title-only edit must not snapshot')
+
+    clock += 1000 // hand-revert to the snapshotted text within the session…
+    versionsService.onContentEdit(vn.id)
+    notes.update(vn.id, { contentMd: 'alpha delta' })
+    clock += 16 * 60 * 1000 // …then a new session whose pre-edit state equals the latest version
+    versionsService.onContentEdit(vn.id)
+    notes.update(vn.id, { contentMd: 'alpha foxtrot' })
+    if (versions.list(vn.id).length !== 2) throw new Error('dedup did not skip an identical snapshot')
+
+    // versions:restore semantics (handler logic): non-destructive, pre_restore first
+    const target = versions.list(vn.id).find((v) => versions.get(v.id)!.contentMd === 'alpha bravo')!
+    versions.snapshot(notes.get(vn.id)!, 'pre_restore')
+    const restored = versions.get(target.id)!
+    notes.update(vn.id, { title: restored.title, contentMd: restored.contentMd })
+    indexer.flushNote(vn.id)
+    const afterRestore = versions.list(vn.id)
+    if (afterRestore.length !== 3 || afterRestore[0]!.kind !== 'pre_restore') throw new Error('restore did not add a pre_restore version')
+    if (notes.get(vn.id)!.contentMd !== 'alpha bravo') throw new Error('restore did not roundtrip content')
+    if (search.keyword('bravo').length !== 1) throw new Error('restored content not searchable after flushNote')
+
+    console.log('[smoke] versions OK — once-per-session snapshots, 15 min gap, title-only/dedup skips, pre_restore roundtrip')
+
+    // ── M4: import end-to-end ──
+    const { createImportService } = await import('./services/importService')
+    const importDir = join(dir, 'import-src')
+    const folderDir = join(importDir, 'Project Alpha')
+    mkdirSync(folderDir, { recursive: true })
+    for (let i = 0; i < 46; i++) {
+      writeFileSync(join(importDir, `plain-${String(i).padStart(2, '0')}.md`), `Import marker number${i}\n`)
+    }
+    writeFileSync(join(importDir, 'h1-note.md'), '# Imported H1 Title\n\nh1body content here\n')
+    writeFileSync(join(importDir, 'crlf-note.txt'), 'crlf line one\r\nimportcrlf body\r\n')
+    writeFileSync(join(importDir, 'big.md'), 'x'.repeat(2 * 1024 * 1024 + 1)) // > 2 MB cap → skipped
+    writeFileSync(join(folderDir, 'one.md'), 'folder member one\n')
+    writeFileSync(join(folderDir, 'two.md'), 'folder member two\n')
+
+    const preExisting = collections.create({ name: 'Project Alpha' }) // import must REUSE it
+    const progress: { done: number; total: number }[] = []
+    const importer = createImportService({
+      notes,
+      collections,
+      versions,
+      indexer,
+      onProgress: (done, total) => progress.push({ done, total })
+    })
+    const importPaths = [
+      ...Array.from({ length: 46 }, (_, i) => join(importDir, `plain-${String(i).padStart(2, '0')}.md`)),
+      join(importDir, 'h1-note.md'),
+      join(importDir, 'crlf-note.txt'),
+      join(importDir, 'big.md'),
+      join(importDir, 'ghost.md'), // never written — must skip, not abort
+      folderDir // directory → 2 files, collection 'Project Alpha'
+    ]
+    const { createdIds, skipped } = await importer.importPaths(importPaths)
+    const expectedTotal = 52 // 46 + h1 + crlf + big + ghost + 2 folder files
+    if (createdIds.length !== 50) throw new Error(`import created ${createdIds.length} notes, expected 50`)
+    if (skipped.length !== 2) throw new Error(`import skipped ${skipped.length} files, expected 2 (oversize + missing)`)
+    if (progress.length !== expectedTotal) throw new Error('import progress did not fire once per file')
+    const last = progress[progress.length - 1]!
+    if (last.done !== expectedTotal || last.total !== expectedTotal) throw new Error('import progress counts wrong')
+
+    const imported = createdIds.map((id) => notes.get(id)!)
+    const h1Note = imported.find((n) => n.title === 'Imported H1 Title')
+    if (!h1Note) throw new Error('H1 title was not derived')
+    if (h1Note.contentMd.includes('# Imported H1 Title')) throw new Error('H1 was not stripped from content')
+    if (versions.list(h1Note.id)[0]?.kind !== 'import') throw new Error('import snapshot missing')
+    const crlfNote = imported.find((n) => n.title === 'crlf-note')
+    if (!crlfNote) throw new Error('filename title was not derived for the CRLF file')
+    if (crlfNote.contentMd.includes('\r')) throw new Error('CRLF was not normalized to LF')
+    if (!imported.some((n) => n.title === 'plain-17')) throw new Error('plain filename title missing')
+
+    if (collections.getByName('Project Alpha')?.id !== preExisting.id) throw new Error('folder collection was not reused by name')
+    const members = imported.filter((n) => notes.getWithRefs(n.id)!.collectionIds.includes(preExisting.id))
+    if (members.length !== 2) throw new Error('folder files did not join the folder collection')
+
+    for (const id of createdIds) indexer.flushNote(id) // searchable without waiting out the debounce
+    if (search.keyword('number17').length !== 1) throw new Error('imported note not searchable after flush')
+    if (search.keyword('h1body').length !== 1) throw new Error('imported H1 note not searchable after flush')
+
+    console.log('[smoke] import OK — 50 notes (titles, CRLF, folder collection), 2 skipped, per-file progress, searchable')
 
     // Reopen (restart persistence)
     closeDb()

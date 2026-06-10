@@ -5,7 +5,9 @@ import type { Note } from '@shared/types'
 import type { MarkdownManager } from '@tiptap/markdown'
 import { invoke, on } from '../api'
 import { useTabsStore } from '../stores/tabs'
+import { useUiStore, toast } from '../stores/ui'
 import Editor from '../editor/Editor'
+import VersionHistoryModal from './VersionHistoryModal'
 
 /** Saved markdown is canonical without trailing newlines. */
 function normalizeMd(md: string): string {
@@ -36,6 +38,7 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
   const [gone, setGone] = useState<'missing' | 'trashed' | null>(null)
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const [epoch, setEpoch] = useState(0)
+  const historyOpen = useUiStore((s) => s.historyNoteId === noteId)
 
   const save = useRef<SaveState>({
     base: 0,
@@ -112,6 +115,21 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
   const flushRef = useRef(flush)
   flushRef.current = flush
 
+  // Menu File > Export routes here (the registry can't flush): flush, then export.
+  const exportRequest = useUiStore((s) => s.exportRequest)
+  const lastExportReq = useRef(exportRequest)
+  useEffect(() => {
+    if (exportRequest === lastExportReq.current) return
+    lastExportReq.current = exportRequest
+    void flushRef.current().then(() =>
+      invoke('notes:export', { id: noteId })
+        .then((res) => {
+          if (res.path) toast(`Exported to ${res.path}`)
+        })
+        .catch(() => toast('Export failed'))
+    )
+  }, [exportRequest, noteId])
+
   const schedule = useCallback((): void => {
     const s = save.current
     if (s.timer) clearTimeout(s.timer)
@@ -127,6 +145,12 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
     void invoke('notes:get', { id: noteId })
       .then((n) => {
         if (cancelled) return
+        if (n.trashedAt !== null) {
+          // Session-restored tab pointing at a note trashed in a previous run.
+          save.current.disabled = true
+          setGone('trashed')
+          return
+        }
         const s = save.current
         if (s.timer) {
           clearTimeout(s.timer) // a pending save from the outgoing editor must not fire mid-reload
@@ -151,6 +175,14 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
       cancelled = true
     }
   }, [noteId, epoch])
+
+  // A history modal left open must not follow the user to another tab/note.
+  useEffect(() => {
+    return () => {
+      const ui = useUiStore.getState()
+      if (ui.historyNoteId === noteId) ui.closeHistory()
+    }
+  }, [noteId])
 
   // Flush on tab switch/close (unmount) and best-effort on window blur/unload.
   // beforeunload cannot await; the blur flush plus the ≤800 ms autosave window
@@ -262,7 +294,30 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
             placeholder="Untitled"
             className="min-w-0 flex-1 bg-transparent text-2xl font-semibold tracking-tight outline-none placeholder:text-ink-muted/40"
           />
-          <span className="shrink-0 text-[11px] text-ink-muted">{savedLabel}</span>
+          <div className="flex shrink-0 items-baseline gap-3 text-[11px] text-ink-muted">
+            <span>{savedLabel}</span>
+            <button
+              title="Version History"
+              onClick={() => useUiStore.getState().openHistory(noteId)}
+              className="hover:text-ink"
+            >
+              History
+            </button>
+            <button
+              title="Export as Markdown"
+              onClick={() => {
+                // Flush first so the exported file matches what's on screen.
+                void flushRef.current().then(() =>
+                  invoke('notes:export', { id: noteId }).then((res) => {
+                    if (res.path) toast(`Exported to ${res.path}`)
+                  })
+                )
+              }}
+              className="hover:text-ink"
+            >
+              Export
+            </button>
+          </div>
         </div>
         <div className="mt-4 flex min-h-0 flex-1 flex-col">
           <Editor
@@ -288,6 +343,21 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
           />
         </div>
       </div>
+      {historyOpen && (
+        <VersionHistoryModal
+          noteId={noteId}
+          currentMd={currentMd() ?? normalizeMd(note.contentMd)}
+          onClose={() => useUiStore.getState().closeHistory()}
+          onRestore={async (versionId) => {
+            // Park pending edits first so a stale autosave can't clobber the
+            // restored content; the reload then arrives via data:changed
+            // (op 'restore' — see the versions:restore handler).
+            await flushRef.current()
+            await invoke('versions:restore', { versionId })
+            useUiStore.getState().closeHistory()
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { on } from './api'
+import { invoke, on, pathForFile } from './api'
 import { initTabsPersistence } from './stores/tabs'
 import { useNotesStore } from './stores/notes'
 import { useCollectionsStore } from './stores/collections'
@@ -9,6 +9,8 @@ import { TitlebarRegion } from './shell/TabStrip'
 import { Sidebar } from './shell/Sidebar'
 import { PaneArea } from './shell/PaneArea'
 import { SearchPalette } from './shell/SearchPalette'
+import { ImportProgressToast } from './shell/ImportProgressToast'
+
 
 function Toasts(): React.JSX.Element {
   const toasts = useUiStore((s) => s.toasts)
@@ -46,6 +48,21 @@ export default function App(): React.JSX.Element {
     const offTheme = on('theme:changed', ({ dark }) => {
       document.documentElement.classList.toggle('dark', dark)
     })
+    // Drag-and-drop import: collect absolute paths via the preload bridge
+    // (File.path does not exist in sandboxed renderers) and hand them to main.
+    function onDragOver(e: DragEvent): void {
+      e.preventDefault()
+    }
+    function onDrop(e: DragEvent): void {
+      e.preventDefault()
+      // No extension filter here: collectTargets (main) filters md/txt and
+      // expands dropped FOLDERS into their files + a collection (review minor 3).
+      const paths = Array.from(e.dataTransfer?.files ?? []).map((f) => pathForFile(f))
+      // Guard: an empty list must NOT invoke (empty filePaths means "open the dialog").
+      if (paths.length > 0) void invoke('notes:import', { filePaths: paths })
+    }
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('drop', onDrop)
     void Promise.all([
       initTabsPersistence(),
       useNotesStore.getState().refresh(),
@@ -60,6 +77,8 @@ export default function App(): React.JSX.Element {
       offCommands()
       offData()
       offTheme()
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('drop', onDrop)
     }
   }, [])
 
@@ -87,6 +106,7 @@ export default function App(): React.JSX.Element {
         <PaneArea />
       </div>
       <SearchPalette />
+      <ImportProgressToast />
       <Toasts />
     </div>
   )

@@ -81,10 +81,12 @@ export function createTemplatesRepo(db: Database.Database) {
 export function createVersionsRepo(db: Database.Database) {
   return {
     list(noteId: string): VersionMeta[] {
+      // id DESC tiebreak: uuidv7 is monotonic, so same-millisecond snapshots
+      // (autosave bursts) still come back in insert order.
       const rows = db
         .prepare(
           `SELECT id, note_id, kind, created_at, LENGTH(content_md) AS size_chars
-           FROM note_versions WHERE note_id = ? ORDER BY created_at DESC`
+           FROM note_versions WHERE note_id = ? ORDER BY created_at DESC, id DESC`
         )
         .all(noteId) as { id: string; note_id: string; kind: VersionKind; created_at: number; size_chars: number }[]
       return rows.map((r) => ({

@@ -8,6 +8,13 @@ import { useUiStore, toast } from '../stores/ui'
  * menu:command pushes and dispatch into the stores. Commands whose feature
  * hasn't shipped yet toast instead of silently no-oping.
  */
+/** Commands that act on "the note" target the active tab's note. */
+function activeNoteId(): string | null {
+  const s = useTabsStore.getState()
+  const content = s.tabs[s.activeTabIndex]?.content
+  return content?.kind === 'note' ? content.noteId : null
+}
+
 const handlers: Partial<Record<CommandId, () => void>> = {
   'new-note': () => {
     void invoke('notes:create', {}).then((note) => {
@@ -22,7 +29,24 @@ const handlers: Partial<Record<CommandId, () => void>> = {
   'prev-tab': () => useTabsStore.getState().prevTab(),
   'nav-back': () => useTabsStore.getState().navBack(),
   'nav-forward': () => useTabsStore.getState().navForward(),
-  'view-history': () => toast('Version history arrives in M4'),
+  'view-history': () => {
+    const noteId = activeNoteId()
+    if (noteId) useUiStore.getState().openHistory(noteId)
+    else toast('Open a note to view its history')
+  },
+  'export-note': () => {
+    const noteId = activeNoteId()
+    if (!noteId) {
+      toast('Open a note to export')
+      return
+    }
+    // The mounted NoteView owns the save pipeline: it flushes dirty edits, THEN exports.
+    useUiStore.getState().requestExport()
+  },
+  'import-files': () => {
+    // Empty filePaths = "ask": main owns the open dialog (sandboxed renderer has no fs).
+    void invoke('notes:import', { filePaths: [] })
+  },
   organize: () => toast('Organize arrives in M8')
 }
 

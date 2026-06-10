@@ -3,6 +3,7 @@ import type { IpcInvokeMap, IpcPushMap, InvokeChannel, PushChannel } from '@shar
 type RawApi = {
   invoke(channel: InvokeChannel, ...args: unknown[]): Promise<unknown>
   on(channel: PushChannel, callback: (payload: unknown) => void): () => void
+  pathForFile(file: File): string
 }
 
 declare global {
@@ -24,4 +25,9 @@ export function on<C extends PushChannel>(
   callback: (payload: IpcPushMap[C]) => void
 ): () => void {
   return window.api.on(channel, callback as (payload: unknown) => void)
+}
+
+/** Absolute path of a dropped File (File.path is gone in sandboxed renderers). */
+export function pathForFile(file: File): string {
+  return window.api.pathForFile(file)
 }
