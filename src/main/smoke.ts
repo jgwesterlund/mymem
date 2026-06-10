@@ -31,8 +31,8 @@ export async function runSmoke(): Promise<number> {
     const fts = db.prepare("SELECT sqlite_compileoption_used('ENABLE_FTS5') AS v").get() as { v: number }
     if (fts.v !== 1) throw new Error('SQLite built without FTS5')
 
-    const vec = await import('sqlite-vec')
-    vec.load(db)
+    const { loadSqliteVec } = await import('./db/sqliteVec')
+    loadSqliteVec(db)
     const vv = db.prepare('SELECT vec_version() AS v').get() as { v: string }
     const sv = db.prepare('SELECT sqlite_version() AS v').get() as { v: string }
     console.log(`[smoke] better-sqlite3 OK — sqlite ${sv.v}, FTS5 on, sqlite-vec ${vv.v}`)

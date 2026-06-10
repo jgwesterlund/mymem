@@ -7,7 +7,9 @@ files:
   - out/**
 asarUnpack:
   - "**/node_modules/better-sqlite3/**"
-  - "**/node_modules/sqlite-vec/**"
+  # sqlite-vec ships its loadable vec0.dylib in platform packages (sqlite-vec-darwin-arm64
+  # etc.) — dylibs cannot be dlopen'd from inside the asar archive.
+  - "**/node_modules/sqlite-vec*/**"
 mac:
   category: public.app-category.productivity
   target:
