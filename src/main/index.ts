@@ -57,6 +57,7 @@ if (process.env.MYMEM_SMOKE) {
       globalShortcut.unregisterAll()
       // Drain pending index jobs so a quit inside the 2 s debounce can't leave stale chunks.
       getServices().indexer.flushAll()
+      getServices().embedder.stop() // no restarts after this — embedded=0 backlog drains next boot
       closeDb()
     })
   }

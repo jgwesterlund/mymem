@@ -11,14 +11,15 @@ import { push } from '../ipc/registry'
  * flag (the hash includes the title, so a typo edit re-embeds exactly one
  * chunk in M5). Everything else is delete + insert in ONE transaction; FTS
  * follows via triggers, chunks_vec is deleted explicitly (vec0 has no
- * triggers). Embedding the embedded=0 backlog is M5's drain.
+ * triggers). Embedding the embedded=0 backlog is the embed queue's drain —
+ * onIndexed fires after every completed job so it can kick.
  */
 const DEBOUNCE_MS = 2000
 
 type NoteRow = { id: string; title: string; content_md: string; trashed_at: number | null }
 type ChunkRow = { id: number; idx: number; text_hash: string }
 
-export function createIndexer(db: Database.Database) {
+export function createIndexer(db: Database.Database, onIndexed?: () => void) {
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
   let rebuild: { jobId: string; queue: string[]; total: number; done: number } | null = null
 
@@ -40,7 +41,9 @@ export function createIndexer(db: Database.Database) {
     const existing = selectChunks.all(noteId) as ChunkRow[]
 
     const dropRow = (row: ChunkRow): void => {
-      deleteVec.run(row.id) // vec rows are not trigger-synced — delete explicitly
+      // vec rows are not trigger-synced — delete explicitly. BigInt: better-sqlite3
+      // binds plain numbers as doubles, and vec0 only accepts INTEGER rowids.
+      deleteVec.run(BigInt(row.id))
       deleteChunk.run(row.id) // FTS delete fires via trg_chunks_ad
     }
 
@@ -68,6 +71,7 @@ export function createIndexer(db: Database.Database) {
   const runSafely = (noteId: string): void => {
     try {
       indexNote(noteId)
+      onIndexed?.()
     } catch (err) {
       console.error(`[indexer] indexing failed for note ${noteId}`, err)
     }
@@ -92,6 +96,7 @@ export function createIndexer(db: Database.Database) {
       timers.delete(noteId)
     }
     indexNote(noteId)
+    onIndexed?.()
   }
 
   const stepRebuild = (): void => {

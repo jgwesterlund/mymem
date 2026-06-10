@@ -23,6 +23,17 @@ export default defineConfig({
         '@shared': resolve('src/shared'),
         '@main': resolve('src/main')
       }
+    },
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          // utilityProcess entry: must stay its own file (out/main/embeddings.worker.js),
+          // never bundled into main's index.js. @huggingface/transformers stays external
+          // via externalizeDepsPlugin (it is in dependencies).
+          'embeddings.worker': resolve('src/main/workers/embeddings.worker.ts')
+        }
+      }
     }
   },
   preload: {

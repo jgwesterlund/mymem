@@ -41,11 +41,126 @@ export async function runSmoke(): Promise<number> {
 
     await smokeDataSpine()
 
+    // Real end-to-end embeddings (network, ~23 MB model download) — opt-in only.
+    if (process.env.MYMEM_SMOKE_EMBED) await smokeRealEmbeddings()
+
     console.log('[smoke] ALL OK')
     return 0
   } catch (err) {
     console.error('[smoke] FAILED:', err)
     return 1
+  }
+}
+
+function waitFor(cond: () => boolean, timeoutMs: number, what: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const started = Date.now()
+    const tick = (): void => {
+      if (cond()) return resolve()
+      if (Date.now() - started > timeoutMs) return reject(new Error(`timed out waiting for ${what}`))
+      setTimeout(tick, 200)
+    }
+    tick()
+  })
+}
+
+/**
+ * MYMEM_SMOKE_EMBED=1: spawn the real utilityProcess worker, download/load the
+ * model (cached in userData/models), drain the embed queue, run deep search +
+ * related over real vectors, then SIGKILL the worker and assert the supervisor
+ * recovers. Too heavy for the default CI smoke, which uses synthetic vectors.
+ */
+async function smokeRealEmbeddings(): Promise<void> {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+
+  const dir = mkdtempSync(join(tmpdir(), 'mymem-smoke-embed-'))
+  process.env.MYMEM_DB_PATH = join(dir, 'smoke.db')
+  const { createEmbedderClient } = await import('./indexing/embedderClient')
+  const embedder = createEmbedderClient()
+  try {
+    const { getDb } = await import('./db/connection')
+    const { createNotesRepo } = await import('./db/repos/notesRepo')
+    const { createIndexer } = await import('./indexing/indexer')
+    const { createEmbedQueue } = await import('./indexing/embedQueue')
+    const { createSearchService } = await import('./search/searchService')
+    const { createRelatedService } = await import('./search/relatedService')
+
+    const dbi = getDb()
+    const notes = createNotesRepo(dbi)
+    const queue = createEmbedQueue(dbi, embedder)
+    const indexer = createIndexer(dbi, () => queue.kick())
+    const search = createSearchService(dbi, embedder)
+    const related = createRelatedService(dbi, embedder)
+
+    const grocery = notes.create({
+      title: 'Grocery list',
+      contentMd: 'Buy milk, eggs, bread and cheese for cooking dinner this week.'
+    })
+    const meals = notes.create({
+      title: 'Meal planning',
+      contentMd: 'Weekly dinner recipes: pasta with tomatoes, vegetable curry, roasted potatoes.'
+    })
+    const revenue = notes.create({
+      title: 'Quarterly revenue',
+      contentMd: 'Q3 revenue forecast spreadsheet, budget assumptions and headcount plan.'
+    })
+    for (const n of [grocery, meals, revenue]) indexer.flushNote(n.id)
+
+    let lastLogged = -1
+    embedder.onStatusChange((st) => {
+      if (st.state === 'downloading' && st.progress !== undefined) {
+        const pct = Math.floor(st.progress * 10) * 10
+        if (pct > lastLogged) {
+          lastLogged = pct
+          console.log(`[smoke-embed] model download ${pct}%`)
+        }
+      }
+      if (st.state === 'ready') queue.kick()
+    })
+    console.log('[smoke-embed] starting worker (first run downloads ~23 MB)…')
+    embedder.start()
+    await waitFor(() => embedder.status().state === 'ready', 5 * 60_000, 'worker ready')
+    queue.kick()
+    await waitFor(() => queue.pendingCount() === 0, 120_000, 'embed backlog drained')
+    console.log('[smoke-embed] worker ready, backlog embedded')
+
+    const deep = await search.deep('food and cooking')
+    if (deep.usedMode !== 'deep') throw new Error(`deep search used mode ${deep.usedMode}`)
+    if (deep.results.length === 0) throw new Error('deep search returned nothing')
+    console.log(
+      '[smoke-embed] deep("food and cooking") →',
+      deep.results.map((r) => `${r.title} (${r.score.toFixed(4)})`).join(' · ')
+    )
+    if (deep.results[0]!.noteId === revenue.id) {
+      throw new Error('deep search ranked the revenue note first for a food query')
+    }
+
+    const rel = related.forNote(grocery.id, true) // broaden — real MiniLM sims are fuzzy
+    console.log(
+      '[smoke-embed] related(grocery, broaden) →',
+      rel.notes.map((n) => `${n.title} (${n.score.toFixed(3)})`).join(' · ') || '(none)'
+    )
+    if (!rel.notes.some((n) => n.noteId === meals.id)) throw new Error('related missed the meal-planning note')
+    if (rel.notes.some((n) => n.noteId === grocery.id)) throw new Error('related included the note itself')
+
+    // kill -9 → supervisor restarts with backoff and embeds again (M5 done-criterion)
+    const pid = embedder.pid()
+    if (!pid) throw new Error('embedder exposed no worker pid')
+    console.log(`[smoke-embed] SIGKILL worker pid ${pid}`)
+    process.kill(pid, 'SIGKILL')
+    await waitFor(() => embedder.status().state !== 'ready', 10_000, 'worker reported down')
+    await waitFor(() => embedder.status().state === 'ready', 120_000, 'worker recovered')
+    const vecs = await embedder.embed(['recovery probe'])
+    if (vecs[0]!.length !== 384) throw new Error('post-recovery embed has wrong dimension')
+    console.log('[smoke-embed] kill -9 recovery OK — worker restarted and embeds again')
+  } finally {
+    embedder.stop()
+    const { closeDb } = await import('./db/connection')
+    closeDb()
+    delete process.env.MYMEM_DB_PATH
+    rmSync(dir, { recursive: true, force: true })
   }
 }
 
@@ -234,6 +349,100 @@ async function smokeDataSpine(): Promise<void> {
     if (search.keyword('h1body').length !== 1) throw new Error('imported H1 note not searchable after flush')
 
     console.log('[smoke] import OK — 50 notes (titles, CRLF, folder collection), 2 skipped, per-file progress, searchable')
+
+    // ── M5: deep search RRF + related notes over SYNTHETIC vectors ──
+    // No model download in CI: plant unit vectors directly in chunks_vec and
+    // exercise the exact SQL paths the embedding worker feeds in production.
+    const { createRelatedService } = await import('./search/relatedService')
+    const DIM = 384
+    const axis = (i: number, j = -1, mix = 0): Float32Array => {
+      const v = new Float32Array(DIM)
+      v[i] = Math.sqrt(1 - mix * mix)
+      if (j >= 0 && mix > 0) v[j] = mix
+      return v
+    }
+    const blob = (v: Float32Array): Buffer => Buffer.from(v.buffer, v.byteOffset, v.byteLength)
+    const chunkIdsOf = (noteId: string): number[] =>
+      (dbi.prepare(`SELECT id FROM chunks WHERE note_id = ? ORDER BY idx`).all(noteId) as { id: number }[]).map(
+        (r) => r.id
+      )
+    const plantVec = (chunkId: number, v: Float32Array): void => {
+      // BigInt rowid — vec0 rejects better-sqlite3's default double binding.
+      dbi.prepare(`INSERT INTO chunks_vec (rowid, embedding) VALUES (?, vec_f32(?))`).run(BigInt(chunkId), blob(v))
+      dbi.prepare(`UPDATE chunks SET embedded = 1 WHERE id = ?`).run(chunkId)
+    }
+
+    const mkNote = (title: string, contentMd: string): string => {
+      const n = notes.create({ title, contentMd })
+      indexer.flushNote(n.id)
+      return n.id
+    }
+
+    // Verify the declared metric really is cosine: orthogonal unit vectors → distance 1.
+    const metricProbe = mkNote('Metric probe', 'metric probe body')
+    plantVec(chunkIdsOf(metricProbe)[0]!, axis(100))
+    const probeDist = (
+      dbi
+        .prepare(`SELECT distance FROM chunks_vec WHERE embedding MATCH ? AND k = 1`)
+        .get(blob(axis(101))) as { distance: number }
+    ).distance
+    if (Math.abs(probeDist - 1) > 1e-5) throw new Error(`vec0 metric is not cosine (orthogonal distance ${probeDist})`)
+
+    const noteBoth = mkNote('Capacitor research', 'quantum flux capacitor research findings')
+    const noteVecOnly = mkNote('Displacement engine', 'temporal displacement engine prototype')
+    const noteFtsOnly = mkNote('Flux logbook', 'flux measurements from the field bench') // no vector planted
+    // Query vector = e0. noteVecOnly is the closest vector (KNN rank 1) but has no FTS
+    // hit; noteBoth is vec rank 2 AND an FTS hit for 'flux' — fusion must win:
+    // noteBoth ≥ 1/62+1/62 > any single-list score (≤ 1/61).
+    plantVec(chunkIdsOf(noteBoth)[0]!, axis(0, 1, 0.4)) // cos sim ≈ 0.917
+    plantVec(chunkIdsOf(noteVecOnly)[0]!, axis(0, 1, 0.2)) // cos sim ≈ 0.980
+
+    const deepHits = search.deepWithVector('flux', axis(0))
+    if (deepHits[0]?.noteId !== noteBoth) throw new Error('RRF did not rank the FTS+vector note first')
+    const deepIds = deepHits.map((r) => r.noteId)
+    if (!deepIds.includes(noteVecOnly)) throw new Error('vector-only note missing from deep results')
+    if (!deepIds.includes(noteFtsOnly)) throw new Error('FTS-only note missing from deep results')
+    if (!deepHits[0]!.snippetHtml.includes('<mark>')) throw new Error('deep snippet missing <mark> for FTS winner')
+    const vecOnlyHit = deepHits.find((r) => r.noteId === noteVecOnly)!
+    if (vecOnlyHit.snippetHtml.includes('<mark>')) throw new Error('vector-only hit should have a plain excerpt')
+    if (vecOnlyHit.snippetHtml.length === 0) throw new Error('vector-only hit has an empty snippet')
+
+    // (c) keyword fallback: no embedder wired → usedMode 'keyword'
+    const fallback = await search.deep('flux')
+    if (fallback.usedMode !== 'keyword') throw new Error('deep without a ready worker must fall back to keyword')
+    if (fallback.results.length === 0) throw new Error('keyword fallback returned no results')
+
+    // (b) related: planted-similar note above threshold, self + orthogonal excluded
+    const related = createRelatedService(dbi)
+    const noteX = mkNote('Multi chunk origin', '# Alpha\n\norigin chunk one\n\n# Beta\n\norigin chunk two')
+    const noteY = mkNote('Planted similar', 'planted similar content body')
+    const noteZ = mkNote('Unrelated note', 'completely unrelated content body')
+    const xChunks = chunkIdsOf(noteX)
+    if (xChunks.length < 2) throw new Error('expected multiple chunks for the multi-heading note')
+    xChunks.forEach((id, i) => plantVec(id, axis(200 + i)))
+    plantVec(chunkIdsOf(noteY)[0]!, axis(200, 201, 0.3)) // sim ≈ 0.954 to noteX chunk 0
+    plantVec(chunkIdsOf(noteZ)[0]!, axis(250)) // orthogonal to every probe
+    const relCol = collections.create({ name: 'Related rollup' })
+    const sharedCol = collections.create({ name: 'Shared membership' })
+    collections.setForNote(noteY, [relCol.id, sharedCol.id])
+    collections.setForNote(noteX, [sharedCol.id])
+
+    const rel = related.forNote(noteX)
+    if (rel.unavailableReason) throw new Error(`related unavailable: ${rel.unavailableReason}`)
+    if (rel.notes[0]?.noteId !== noteY) throw new Error('related missed the planted-similar note')
+    if (rel.notes[0]!.score < 0.45) throw new Error(`related score ${rel.notes[0]!.score} below threshold`)
+    if (rel.notes.some((n) => n.noteId === noteX)) throw new Error('related included the note itself')
+    if (rel.notes.some((n) => n.noteId === noteZ)) throw new Error('related included an orthogonal note')
+    if (!rel.collections.some((c) => c.collectionId === relCol.id)) throw new Error('related collections rollup missing')
+    if (rel.collections.some((c) => c.collectionId === sharedCol.id)) {
+      throw new Error("related collections must exclude the note's own collections")
+    }
+    const relUnembedded = related.forNote(mkNote('Fresh unembedded', 'fresh body text'))
+    if (relUnembedded.unavailableReason !== 'embeddings-disabled') {
+      throw new Error('unembedded note must report the worker state as unavailableReason')
+    }
+
+    console.log('[smoke] M5 synthetic OK — cosine vec0, RRF fusion + snippets, keyword fallback, related notes/collections')
 
     // Reopen (restart persistence)
     closeDb()

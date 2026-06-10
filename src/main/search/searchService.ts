@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import type { SearchResult } from '@shared/types'
+import type { EmbedderClient } from '../indexing/embedderClient'
 
 /**
  * Sanitize user input into FTS5 MATCH syntax. PURE — adversarial unit tests
@@ -56,10 +57,75 @@ const keywordSql = (withCollection: boolean): string => `
   ORDER BY rank
   LIMIT @limit`
 
-export function createSearchService(db: Database.Database) {
+// ── Deep search: RRF over FTS top-20 ⋈ KNN top-20 (plan SQL) ─────────────────
+// fts_raw stays FTS-only and MATERIALIZED for the same bm25-context reason as
+// keywordSql; ranks are densified with ROW_NUMBER OUTSIDE the MATCH query.
+// chunks_vec KNN distance is cosine (declared distance_metric=cosine).
+// score = COALESCE(1/(60+fts_rank),0) + COALESCE(1/(60+vec_rank),0), aggregated
+// to notes via MAX — the bare c.id/c.text come from that same winning chunk row
+// (SQLite MAX() bare-column guarantee), which feeds the snippet pass.
+const RRF_K = 60
+const RRF_TOP = 20
+
+const deepSql = (withCollection: boolean): string => `
+  WITH fts_raw AS MATERIALIZED (
+    SELECT rowid AS chunk_id, bm25(chunks_fts, 3.0, 1.0) AS r
+    FROM chunks_fts
+    WHERE chunks_fts MATCH @match
+    ORDER BY r
+    LIMIT ${RRF_TOP}
+  ),
+  fts_hits AS (
+    SELECT chunk_id, ROW_NUMBER() OVER (ORDER BY r) AS rank FROM fts_raw
+  ),
+  vec_hits AS (
+    SELECT chunk_id, ROW_NUMBER() OVER (ORDER BY distance) AS rank FROM (
+      SELECT rowid AS chunk_id, distance FROM chunks_vec
+      WHERE embedding MATCH @qvec AND k = ${RRF_TOP}
+    )
+  ),
+  fused AS (
+    SELECT COALESCE(f.chunk_id, v.chunk_id) AS chunk_id,
+           COALESCE(1.0 / (${RRF_K} + f.rank), 0) + COALESCE(1.0 / (${RRF_K} + v.rank), 0) AS score
+    FROM fts_hits f FULL OUTER JOIN vec_hits v ON v.chunk_id = f.chunk_id
+  )
+  SELECT n.id AS note_id, n.title AS title, c.id AS chunk_id, c.text AS chunk_text, MAX(u.score) AS score
+  FROM fused u
+  JOIN chunks c ON c.id = u.chunk_id
+  JOIN notes n ON n.id = c.note_id AND n.trashed_at IS NULL
+  ${withCollection ? 'JOIN note_collections nc ON nc.note_id = n.id AND nc.collection_id = @collectionId' : ''}
+  GROUP BY n.id
+  ORDER BY score DESC
+  LIMIT @limit`
+
+// Query with no FTS-sanitizable tokens (emoji-only etc.) → pure KNN ranking.
+const vecOnlySql = (withCollection: boolean): string => `
+  WITH vec_hits AS (
+    SELECT chunk_id, ROW_NUMBER() OVER (ORDER BY distance) AS rank FROM (
+      SELECT rowid AS chunk_id, distance FROM chunks_vec
+      WHERE embedding MATCH @qvec AND k = ${RRF_TOP}
+    )
+  )
+  SELECT n.id AS note_id, n.title AS title, c.id AS chunk_id, c.text AS chunk_text,
+         MAX(1.0 / (${RRF_K} + v.rank)) AS score
+  FROM vec_hits v
+  JOIN chunks c ON c.id = v.chunk_id
+  JOIN notes n ON n.id = c.note_id AND n.trashed_at IS NULL
+  ${withCollection ? 'JOIN note_collections nc ON nc.note_id = n.id AND nc.collection_id = @collectionId' : ''}
+  GROUP BY n.id
+  ORDER BY score DESC
+  LIMIT @limit`
+
+type DeepRow = { note_id: string; title: string; chunk_id: number; chunk_text: string; score: number }
+
+export function createSearchService(db: Database.Database, embedder?: EmbedderClient) {
   const titleLike = db.prepare(TYPEAHEAD_SQL)
   const keywordAll = db.prepare(keywordSql(false))
   const keywordInCollection = db.prepare(keywordSql(true))
+  const deepAll = db.prepare(deepSql(false))
+  const deepInCollection = db.prepare(deepSql(true))
+  const vecOnlyAll = db.prepare(vecOnlySql(false))
+  const vecOnlyInCollection = db.prepare(vecOnlySql(true))
 
   return {
     /** Title-only typeahead: prefix matches first, then substring; live notes, ≤10. */
@@ -96,9 +162,60 @@ export function createSearchService(db: Database.Database) {
       }))
     },
 
-    /** Semantic RRF lands with the embedding worker (M5); keyword serves both until then. */
-    deep(q: string, collectionId?: string, limit?: number): { results: SearchResult[]; usedMode: 'keyword' } {
-      return { results: this.keyword(q, collectionId, limit), usedMode: 'keyword' }
+    /** Semantic RRF when the worker is ready; degrades to keyword otherwise. */
+    async deep(
+      q: string,
+      collectionId?: string,
+      limit?: number
+    ): Promise<{ results: SearchResult[]; usedMode: 'keyword' | 'deep' }> {
+      if (!embedder || embedder.status().state !== 'ready') {
+        return { results: this.keyword(q, collectionId, limit), usedMode: 'keyword' }
+      }
+      let qvec: Float32Array
+      try {
+        qvec = (await embedder.embed([q]))[0]!
+      } catch (err) {
+        console.error('[search] query embedding failed, falling back to keyword', err)
+        return { results: this.keyword(q, collectionId, limit), usedMode: 'keyword' }
+      }
+      return { results: this.deepWithVector(q, qvec, collectionId, limit), usedMode: 'deep' }
+    },
+
+    /** RRF core with an injected query vector — exported for the synthetic smoke leg. */
+    deepWithVector(q: string, qvec: Float32Array, collectionId?: string, limit = 30): SearchResult[] {
+      const match = sanitizeFtsQuery(q)
+      const params: Record<string, unknown> = {
+        qvec: Buffer.from(qvec.buffer, qvec.byteOffset, qvec.byteLength),
+        limit: Math.min(limit, 100)
+      }
+      let stmt = match === null ? vecOnlyAll : deepAll
+      if (match !== null) params.match = match
+      if (collectionId) {
+        params.collectionId = collectionId
+        stmt = match === null ? vecOnlyInCollection : deepInCollection
+      }
+      const rows = stmt.all(params) as DeepRow[]
+      if (rows.length === 0) return []
+
+      // Snippets: second FTS pass over the winning chunks; vector-only winners get a
+      // plain-text excerpt (the renderer escapes everything except <mark> anyway).
+      const snippets = new Map<number, string>()
+      if (match !== null) {
+        const ids = rows.map((r) => r.chunk_id).join(', ')
+        const snipRows = db
+          .prepare(
+            `SELECT rowid AS chunk_id, snippet(chunks_fts, 1, '<mark>', '</mark>', '…', 12) AS snip
+             FROM chunks_fts WHERE chunks_fts MATCH ? AND rowid IN (${ids})`
+          )
+          .all(match) as { chunk_id: number; snip: string }[]
+        for (const r of snipRows) snippets.set(r.chunk_id, r.snip)
+      }
+      return rows.map((r) => ({
+        noteId: r.note_id,
+        title: r.title,
+        snippetHtml: snippets.get(r.chunk_id) ?? r.chunk_text.slice(0, 200),
+        score: r.score
+      }))
     }
   }
 }

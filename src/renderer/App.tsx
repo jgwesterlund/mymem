@@ -3,11 +3,12 @@ import { invoke, on, pathForFile } from './api'
 import { initTabsPersistence } from './stores/tabs'
 import { useNotesStore } from './stores/notes'
 import { useCollectionsStore } from './stores/collections'
-import { useUiStore } from './stores/ui'
+import { useUiStore, initUiPersistence } from './stores/ui'
 import { initCommandRegistry } from './commands/registry'
 import { TitlebarRegion } from './shell/TabStrip'
 import { Sidebar } from './shell/Sidebar'
 import { PaneArea } from './shell/PaneArea'
+import { RightPanel } from './shell/RightPanel'
 import { SearchPalette } from './shell/SearchPalette'
 import { ImportProgressToast } from './shell/ImportProgressToast'
 
@@ -65,6 +66,7 @@ export default function App(): React.JSX.Element {
     window.addEventListener('drop', onDrop)
     void Promise.all([
       initTabsPersistence(),
+      initUiPersistence(),
       useNotesStore.getState().refresh(),
       useCollectionsStore.getState().refresh()
     ])
@@ -104,6 +106,7 @@ export default function App(): React.JSX.Element {
       <div className="flex min-h-0 flex-1">
         {sidebarVisible && <Sidebar />}
         <PaneArea />
+        <RightPanel />
       </div>
       <SearchPalette />
       <ImportProgressToast />

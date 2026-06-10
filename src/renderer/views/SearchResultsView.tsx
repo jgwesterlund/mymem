@@ -25,7 +25,10 @@ export default function SearchResultsView({ query }: { query: string }): React.J
   const [collectionId, setCollectionId] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [searched, setSearched] = useState(false)
-  const latest = useRef({ q: query, collectionId: '' })
+  const [mode, setMode] = useState<'keyword' | 'deep'>('keyword')
+  const [usedMode, setUsedMode] = useState<'keyword' | 'deep'>('keyword')
+  const [deepReady, setDeepReady] = useState(false)
+  const latest = useRef({ q: query, collectionId: '', mode: 'keyword' as 'keyword' | 'deep' })
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const seq = useRef(0)
 
@@ -39,12 +42,33 @@ export default function SearchResultsView({ query }: { query: string }): React.J
     }
     const res = await invoke('search:query', {
       q: trimmed,
-      mode: 'keyword',
+      mode: latest.current.mode,
       collectionId: latest.current.collectionId || undefined
     })
     if (seq.current !== mySeq) return // a newer query superseded this one
     setResults(res.results)
+    setUsedMode(res.usedMode)
     setSearched(true)
+  }, [])
+
+  function switchMode(next: 'keyword' | 'deep'): void {
+    setMode(next)
+    latest.current.mode = next
+    void run()
+  }
+
+  // Deep is only offered once the local embedding model is ready (M5 consent flow).
+  useEffect(() => {
+    let pushed = false
+    const off = on('embeddings:status-changed', (st) => {
+      pushed = true
+      setDeepReady(st.state === 'ready')
+    })
+    // Initial pull races the subscription: a push that lands first is fresher.
+    void invoke('embeddings:status').then((st) => {
+      if (!pushed) setDeepReady(st.state === 'ready')
+    })
+    return off
   }, [])
 
   useEffect(() => {
@@ -106,16 +130,29 @@ export default function SearchResultsView({ query }: { query: string }): React.J
           ))}
         </select>
         <div className="flex shrink-0 overflow-hidden rounded-lg border border-hairline text-[12px]">
-          <button className="bg-black/10 px-2.5 py-1.5 font-medium">Keyword</button>
           <button
-            disabled
-            title="Semantic search arrives with the embedding model (M5)"
-            className="px-2.5 py-1.5 text-ink-muted/50"
+            onClick={() => switchMode('keyword')}
+            className={mode === 'keyword' ? 'bg-black/10 px-2.5 py-1.5 font-medium' : 'px-2.5 py-1.5 text-ink-muted'}
+          >
+            Keyword
+          </button>
+          <button
+            disabled={!deepReady}
+            title={deepReady ? 'Semantic search (RRF over keyword + vectors)' : 'Deep search needs the embedding model (enable it in Heads Up)'}
+            onClick={() => switchMode('deep')}
+            className={
+              mode === 'deep'
+                ? 'bg-black/10 px-2.5 py-1.5 font-medium'
+                : `px-2.5 py-1.5 ${deepReady ? 'text-ink-muted' : 'text-ink-muted/50'}`
+            }
           >
             Deep
           </button>
         </div>
       </div>
+      {searched && mode === 'deep' && usedMode === 'keyword' && (
+        <p className="mb-2 px-1 text-[12px] text-ink-muted">Used keyword search (model not ready).</p>
+      )}
       {!searched ? (
         <p className="px-1 py-6 text-[13px] text-ink-muted">
           Type a query and press Enter to search your notes.

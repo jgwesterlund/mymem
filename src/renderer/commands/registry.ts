@@ -24,6 +24,8 @@ const handlers: Partial<Record<CommandId, () => void>> = {
   'open-search': () =>
     useUiStore.getState().setSearchPaletteOpen(!useUiStore.getState().searchPaletteOpen),
   'toggle-sidebar': () => useUiStore.getState().toggleSidebar(),
+  'toggle-right-panel': () => useUiStore.getState().toggleRightPanel(),
+  'toggle-heads-up': () => useUiStore.getState().toggleHeadsUp(),
   'close-tab': () => useTabsStore.getState().closeTab(),
   'next-tab': () => useTabsStore.getState().nextTab(),
   'prev-tab': () => useTabsStore.getState().prevTab(),

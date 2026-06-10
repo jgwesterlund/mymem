@@ -10,6 +10,12 @@ asarUnpack:
   # sqlite-vec ships its loadable vec0.dylib in platform packages (sqlite-vec-darwin-arm64
   # etc.) — dylibs cannot be dlopen'd from inside the asar archive.
   - "**/node_modules/sqlite-vec*/**"
+  # Embeddings worker (M5): onnxruntime-node carries the native ORT binding/dylibs.
+  # @huggingface/transformers itself is pure JS (verified: dist/ has only js/mjs/cjs),
+  # but its node bundle eagerly imports sharp, whose native binding lives in @img/*.
+  - "**/node_modules/onnxruntime-node/**"
+  - "**/node_modules/sharp/**"
+  - "**/node_modules/@img/**"
 mac:
   category: public.app-category.productivity
   target:

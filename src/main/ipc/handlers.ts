@@ -10,7 +10,10 @@ import {
   createVersionsRepo
 } from '../db/repos/miscRepos'
 import { createIndexer } from '../indexing/indexer'
+import { createEmbedderClient } from '../indexing/embedderClient'
+import { createEmbedQueue } from '../indexing/embedQueue'
 import { createSearchService } from '../search/searchService'
+import { createRelatedService } from '../search/relatedService'
 import { createVersionsService } from '../services/versionsService'
 import { createImportService } from '../services/importService'
 import { typedHandle, emitDataChanged, push } from './registry'
@@ -25,7 +28,10 @@ export interface Services {
   versions: ReturnType<typeof createVersionsRepo>
   settings: ReturnType<typeof createSettingsRepo>
   indexer: ReturnType<typeof createIndexer>
+  embedder: ReturnType<typeof createEmbedderClient>
+  embedQueue: ReturnType<typeof createEmbedQueue>
   search: ReturnType<typeof createSearchService>
+  related: ReturnType<typeof createRelatedService>
   versionsService: ReturnType<typeof createVersionsService>
   importer: ReturnType<typeof createImportService>
 }
@@ -38,7 +44,9 @@ export function getServices(): Services {
   const notes = createNotesRepo(db)
   const collections = createCollectionsRepo(db)
   const versions = createVersionsRepo(db)
-  const indexer = createIndexer(db)
+  const embedder = createEmbedderClient()
+  const embedQueue = createEmbedQueue(db, embedder)
+  const indexer = createIndexer(db, () => embedQueue.kick())
   services = {
     notes,
     collections,
@@ -47,7 +55,10 @@ export function getServices(): Services {
     versions,
     settings: createSettingsRepo(db),
     indexer,
-    search: createSearchService(db),
+    embedder,
+    embedQueue,
+    search: createSearchService(db, embedder),
+    related: createRelatedService(db, embedder),
     versionsService: createVersionsService(db, { notes, versions }),
     importer: createImportService({
       notes,
@@ -239,17 +250,24 @@ export function registerIpcHandlers(): void {
   typedHandle('settings:set', ({ key, value }) => {
     s.settings.set(key, value)
     push('settings:changed', { key, value })
+    // Consent flips the embeddings worker on (also the renderer's retry path).
+    if (key === 'embeddings.consent') {
+      if (value === true) s.embedder.start()
+      else s.embedder.disable() // consent off takes effect immediately, stays restartable
+    }
     return { ok: true as const }
   })
 
-  // ── Search / index (M3; deep mode degrades to keyword until M5) ──
+  // ── Search / related / index (M3 keyword, M5 deep + Heads Up) ──
   typedHandle('search:typeahead', ({ q }) => s.search.typeahead(q))
   typedHandle('search:query', ({ q, mode, collectionId, limit }) =>
     mode === 'deep'
       ? s.search.deep(q, collectionId, limit)
       : { results: s.search.keyword(q, collectionId, limit), usedMode: 'keyword' as const }
   )
+  typedHandle('related:forNote', ({ noteId, broaden }) => s.related.forNote(noteId, broaden ?? false))
   typedHandle('index:rebuild', () => s.indexer.rebuildAll())
+  typedHandle('embeddings:status', () => s.embedder.status())
 
   // ── Quick capture ──
   typedHandle('capture:save', ({ text }) => {
@@ -269,4 +287,12 @@ export function registerIpcHandlers(): void {
   // Boot pass: index live notes whose chunks are missing (created while the app
   // was down, or whose 2 s debounce died with it). Full rebuild stays manual.
   s.indexer.enqueueMissing()
+
+  // ── Embeddings lifecycle ──
+  s.embedder.onStatusChange((status) => {
+    push('embeddings:status-changed', status)
+    if (status.state === 'ready') s.embedQueue.kick() // drain backlog on (re)start
+  })
+  // Worker only spawns with consent — a fresh offline install stays a keyword app.
+  if (s.settings.get('embeddings.consent') === true) s.embedder.start()
 }

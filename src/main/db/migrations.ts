@@ -21,23 +21,44 @@ export function runMigrations(db: Database.Database): void {
 }
 
 /**
- * chunks_vec lives outside .sql migrations: its dimension follows the active embedding
- * model (MiniLM 384 default). Switching models drops/recreates it and re-embeds (M5).
+ * chunks_vec lives outside .sql migrations: its shape follows the active embedding
+ * model (MiniLM 384 default) and distance metric. We declare distance_metric=cosine
+ * (supported by sqlite-vec 0.1.9 — verified against the shipped vec0.dylib), so KNN
+ * `distance` is cosine distance and similarity = 1 - distance directly.
+ *
+ * A dim/metric mismatch (e.g. a pre-M5 DB whose table was created with the L2
+ * default) drops + recreates the table and resets embedded=0 — vectors are a
+ * rebuildable cache, the embed queue refills them.
  */
+const VEC_METRIC = 'cosine'
+
 function bootstrapVecTable(db: Database.Database): void {
-  const row = db.prepare(`SELECT value FROM settings WHERE key = 'embedding.dim'`).get() as
-    | { value: string }
-    | undefined
-  const dim = row ? (JSON.parse(row.value) as number) : 384
-  const exists = db
-    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'`)
-    .get()
+  const getSetting = <T>(key: string): T | null => {
+    const row = db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as
+      | { value: string }
+      | undefined
+    return row ? (JSON.parse(row.value) as T) : null
+  }
+  const setSetting = (key: string, value: unknown): void => {
+    db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run(key, JSON.stringify(value))
+  }
+
+  const dim = getSetting<number>('embedding.dim') ?? 384
+  let exists =
+    db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'`).get() !==
+    undefined
+
+  if (exists && getSetting<string>('embedding.metric') !== VEC_METRIC) {
+    db.transaction(() => {
+      db.exec(`DROP TABLE chunks_vec`)
+      db.prepare(`UPDATE chunks SET embedded = 0`).run()
+    })()
+    exists = false
+  }
+
   if (!exists) {
-    db.exec(`CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[${dim}])`)
-    if (!row) {
-      db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('embedding.dim', ?)`).run(
-        JSON.stringify(dim)
-      )
-    }
+    db.exec(`CREATE VIRTUAL TABLE chunks_vec USING vec0(embedding float[${dim}] distance_metric=${VEC_METRIC})`)
+    setSetting('embedding.dim', dim)
+    setSetting('embedding.metric', VEC_METRIC)
   }
 }

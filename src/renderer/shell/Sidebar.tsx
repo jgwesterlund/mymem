@@ -1,8 +1,28 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { on } from '../api'
 import { useCollectionsStore } from '../stores/collections'
 import { useNotesStore } from '../stores/notes'
 import { useTabsStore, type PaneContent } from '../stores/tabs'
 import { dispatchCommand } from '../commands/registry'
+
+/** Small badge while the embedding backlog drains (index:progress phase 'embedding'). */
+function IndexingBadge(): React.JSX.Element | null {
+  const [remaining, setRemaining] = useState(0)
+  useEffect(
+    () =>
+      on('index:progress', (p) => {
+        if (p.phase !== 'embedding') return
+        setRemaining(Math.max(0, p.total - p.done))
+      }),
+    []
+  )
+  if (remaining === 0) return null
+  return (
+    <div className="mx-2.5 mt-auto rounded-md bg-black/5 px-2 py-1 text-[11px] text-ink-muted">
+      Embedding {remaining} chunk{remaining === 1 ? '' : 's'}…
+    </div>
+  )
+}
 
 function NavItem({
   label,
@@ -148,6 +168,8 @@ export function Sidebar(): React.JSX.Element {
           )}
         </nav>
       </div>
+
+      <IndexingBadge />
     </aside>
   )
 }

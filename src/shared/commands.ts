@@ -24,8 +24,8 @@ export const COMMANDS: Record<CommandId, CommandSpec> = {
 
   // ── View ──
   'toggle-sidebar': { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+Shift+\\', menu: 'view' },
-  'toggle-right-panel': { label: 'Toggle Right Panel', menu: 'view' },
-  'toggle-heads-up': { label: 'Heads Up', menu: 'view' },
+  'toggle-right-panel': { label: 'Toggle Right Panel', accelerator: 'CmdOrCtrl+\\', menu: 'view' },
+  'toggle-heads-up': { label: 'Heads Up', accelerator: 'CmdOrCtrl+Shift+K', menu: 'view' },
   'nav-back': { label: 'Back', accelerator: 'CmdOrCtrl+[', menu: 'view' },
   'nav-forward': { label: 'Forward', accelerator: 'CmdOrCtrl+]', menu: 'view' },
 
