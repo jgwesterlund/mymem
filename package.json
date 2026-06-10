@@ -1,0 +1,46 @@
+{
+  "name": "mymem",
+  "productName": "myMem",
+  "version": "0.1.0",
+  "description": "Mac-native AI notes app — local-first notes with chat over your own knowledge base",
+  "type": "module",
+  "main": "out/main/index.js",
+  "author": "John Westerlund",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "vitest run",
+    "smoke": "npm run build && MYMEM_SMOKE=1 electron .",
+    "dist": "npm run build && electron-builder --mac",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.79.1",
+    "better-sqlite3": "12.10.0",
+    "sqlite-vec": "0.1.9"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "41.7.2",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^5.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0",
+    "vitest": "^4.1.8",
+    "zustand": "^5.0.14"
+  }
+}

@@ -1,0 +1,18 @@
+appId: com.westerlund.mymem
+productName: myMem
+directories:
+  buildResources: resources
+  output: release
+files:
+  - out/**
+asarUnpack:
+  - "**/node_modules/better-sqlite3/**"
+  - "**/node_modules/sqlite-vec/**"
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - zip
+  # Unsigned during development; signing + notarization wired up in M9.
+  identity: null
+npmRebuild: true
