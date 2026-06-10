@@ -192,6 +192,14 @@ body {
   outline: 2px solid var(--color-accent);
 }
 
+/* FTS snippet highlight (SearchResultsView renders sanitized snippetHtml) */
+.search-snippet mark {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 0.1em;
+}
+
 /* Placeholder (first empty block only) */
 .editor-prose p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);

@@ -14,10 +14,8 @@ const handlers: Partial<Record<CommandId, () => void>> = {
       useTabsStore.getState().openInCurrentTab({ kind: 'note', noteId: note.id })
     })
   },
-  'open-search': () => {
-    // M3 brings the real search palette; the stub opens an (empty) search tab.
-    useTabsStore.getState().openInCurrentTab({ kind: 'search', query: '' })
-  },
+  'open-search': () =>
+    useUiStore.getState().setSearchPaletteOpen(!useUiStore.getState().searchPaletteOpen),
   'toggle-sidebar': () => useUiStore.getState().toggleSidebar(),
   'close-tab': () => useTabsStore.getState().closeTab(),
   'next-tab': () => useTabsStore.getState().nextTab(),

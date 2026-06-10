@@ -56,7 +56,7 @@ export function Sidebar(): React.JSX.Element {
   return (
     <aside className="flex w-60 shrink-0 flex-col gap-4 overflow-y-auto px-3 pb-4">
       <div className="flex flex-col gap-1.5">
-        {/* Stub: focuses real search palette from M3; for now it opens the search tab. */}
+        {/* Opens the Cmd+K search palette (same path as the menu accelerator). */}
         <button
           onClick={() => dispatchCommand('open-search')}
           className="w-full rounded-md border border-hairline bg-black/5 px-2.5 py-1 text-left text-[12px] text-ink-muted"

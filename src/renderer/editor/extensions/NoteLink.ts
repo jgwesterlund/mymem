@@ -103,15 +103,15 @@ export const NoteLink = Node.create<NoteLinkOptions>({
 })
 
 // ── '@' mention menu ───────────────────────────────────────────────────────────
-// search:typeahead ships in M3 — until then items come from the renderer-side
-// notes cache filtered by title (prefix matches ranked first).
+// Items come from main's search:typeahead (title prefix-then-substring over
+// live notes) via the async glue in Editor.tsx.
 export interface NoteLinkItem {
   id: string
   title: string
 }
 
 export interface NoteLinkSuggestionOptions {
-  getItems: (query: string) => NoteLinkItem[]
+  getItems: (query: string) => NoteLinkItem[] | Promise<NoteLinkItem[]>
 }
 
 export const NoteLinkSuggestion = Extension.create<NoteLinkSuggestionOptions>({
@@ -127,7 +127,7 @@ export const NoteLinkSuggestion = Extension.create<NoteLinkSuggestionOptions>({
         editor: this.editor,
         pluginKey: new PluginKey('noteLinkSuggestion'),
         char: '@',
-        items: ({ query }) => this.options.getItems(query).slice(0, 8),
+        items: async ({ query }) => (await this.options.getItems(query)).slice(0, 8),
         command: ({ editor, range, props }) => {
           editor
             .chain()
@@ -143,17 +143,3 @@ export const NoteLinkSuggestion = Extension.create<NoteLinkSuggestionOptions>({
     ]
   }
 })
-
-/** Default item source for the '@' menu: prefix matches first, then substring. */
-export function filterNotesByTitle(notes: NoteLinkItem[], query: string): NoteLinkItem[] {
-  const q = query.trim().toLowerCase()
-  if (!q) return notes
-  const prefix: NoteLinkItem[] = []
-  const rest: NoteLinkItem[] = []
-  for (const n of notes) {
-    const t = n.title.toLowerCase()
-    if (t.startsWith(q)) prefix.push(n)
-    else if (t.includes(q)) rest.push(n)
-  }
-  return [...prefix, ...rest]
-}

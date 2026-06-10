@@ -3,7 +3,7 @@ import HomeView from '../views/HomeView'
 import NoteView from '../views/NoteView'
 import CollectionView from '../views/CollectionView'
 import TrashView from '../views/TrashView'
-import SearchView from '../views/SearchView'
+import SearchResultsView from '../views/SearchResultsView'
 
 function ViewSwitch({ content, tabId }: { content: PaneContent; tabId: string }): React.JSX.Element {
   switch (content.kind) {
@@ -17,7 +17,8 @@ function ViewSwitch({ content, tabId }: { content: PaneContent; tabId: string })
     case 'trash':
       return <TrashView />
     case 'search':
-      return <SearchView query={content.query} />
+      // Keyed per tab+query: a new palette search in the same tab resets the view.
+      return <SearchResultsView key={`${tabId}:${content.query}`} query={content.query} />
   }
 }
 

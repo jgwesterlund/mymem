@@ -4,8 +4,8 @@ import { invoke } from '../api'
 
 /**
  * Cache of all live (non-trashed) notes, newest first. Invalidated by the
- * data:changed subscription set up once in App. Also feeds tab titles and the
- * '@' note-link suggestion menu (search:typeahead arrives in M3).
+ * data:changed subscription set up once in App. Also feeds tab titles
+ * (the '@' note-link menu queries search:typeahead in main instead).
  */
 interface NotesState {
   items: NoteListItem[]

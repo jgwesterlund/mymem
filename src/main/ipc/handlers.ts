@@ -8,6 +8,8 @@ import {
   createTemplatesRepo,
   createVersionsRepo
 } from '../db/repos/miscRepos'
+import { createIndexer } from '../indexing/indexer'
+import { createSearchService } from '../search/searchService'
 import { typedHandle, emitDataChanged, push } from './registry'
 import { hideQuickCapture } from '../windows/quickCapture'
 
@@ -18,6 +20,8 @@ export interface Services {
   templates: ReturnType<typeof createTemplatesRepo>
   versions: ReturnType<typeof createVersionsRepo>
   settings: ReturnType<typeof createSettingsRepo>
+  indexer: ReturnType<typeof createIndexer>
+  search: ReturnType<typeof createSearchService>
 }
 
 let services: Services | null = null
@@ -31,12 +35,14 @@ export function getServices(): Services {
     pins: createPinsRepo(db),
     templates: createTemplatesRepo(db),
     versions: createVersionsRepo(db),
-    settings: createSettingsRepo(db)
+    settings: createSettingsRepo(db),
+    indexer: createIndexer(db),
+    search: createSearchService(db)
   }
   return services
 }
 
-/** M1 surface: app/notes/collections/pins/templates/versions/settings/capture. */
+/** M1 surface: app/notes/collections/pins/templates/versions/settings/capture. M3 adds search/index. */
 export function registerIpcHandlers(): void {
   const s = getServices()
 
@@ -51,6 +57,7 @@ export function registerIpcHandlers(): void {
   typedHandle('notes:create', (input) => {
     const note = s.notes.create(input)
     if (input.collectionIds?.length) s.collections.setForNote(note.id, input.collectionIds)
+    s.indexer.enqueue(note.id)
     emitDataChanged({ entity: 'note', ids: [note.id], op: 'create', origin: 'user' })
     return note
   })
@@ -64,7 +71,10 @@ export function registerIpcHandlers(): void {
     // edit pins title_source to 'user'. AI titling (M8) writes through the repo directly.
     const repoPatch = patch.title !== undefined ? { ...patch, titleSource: 'user' as const } : patch
     const res = s.notes.update(id, repoPatch, baseUpdatedAt)
-    if (!res.conflict) emitDataChanged({ entity: 'note', ids: [id], op: 'update', origin: 'user' })
+    if (!res.conflict) {
+      s.indexer.enqueue(id)
+      emitDataChanged({ entity: 'note', ids: [id], op: 'update', origin: 'user' })
+    }
     return res
   })
   typedHandle('notes:list', (opts) => s.notes.list(opts))
@@ -75,6 +85,7 @@ export function registerIpcHandlers(): void {
   })
   typedHandle('notes:restore', ({ id }) => {
     s.notes.restore(id)
+    s.indexer.enqueue(id) // re-chunk: trash dropped this note's chunks
     emitDataChanged({ entity: 'note', ids: [id], op: 'restore', origin: 'user' })
     return { ok: true as const }
   })
@@ -159,6 +170,7 @@ export function registerIpcHandlers(): void {
     if (!current) throw new Error(`note not found: ${noteId}`)
     s.versions.snapshot(current, 'pre_restore') // non-destructive restore
     s.notes.update(noteId, { title: v.title, contentMd: v.contentMd })
+    s.indexer.enqueue(noteId)
     emitDataChanged({ entity: 'note', ids: [noteId], op: 'update', origin: 'user' })
     return s.notes.get(noteId)!
   })
@@ -169,6 +181,15 @@ export function registerIpcHandlers(): void {
     return { ok: true as const }
   })
 
+  // ── Search / index (M3; deep mode degrades to keyword until M5) ──
+  typedHandle('search:typeahead', ({ q }) => s.search.typeahead(q))
+  typedHandle('search:query', ({ q, mode, collectionId, limit }) =>
+    mode === 'deep'
+      ? s.search.deep(q, collectionId, limit)
+      : { results: s.search.keyword(q, collectionId, limit), usedMode: 'keyword' as const }
+  )
+  typedHandle('index:rebuild', () => s.indexer.rebuildAll())
+
   // ── Quick capture ──
   typedHandle('capture:save', ({ text }) => {
     const firstLine = text.split('\n', 1)[0]!.replace(/^#+\s*/, '').trim()
@@ -176,10 +197,15 @@ export function registerIpcHandlers(): void {
       title: firstLine.length <= 80 ? firstLine : '',
       contentMd: text
     })
+    s.indexer.enqueue(note.id)
     emitDataChanged({ entity: 'note', ids: [note.id], op: 'create', origin: 'capture' })
     return { noteId: note.id }
   })
   typedHandle('capture:hide', () => {
     hideQuickCapture()
   })
+
+  // Boot pass: index live notes whose chunks are missing (created while the app
+  // was down, or whose 2 s debounce died with it). Full rebuild stays manual.
+  s.indexer.enqueueMissing()
 }

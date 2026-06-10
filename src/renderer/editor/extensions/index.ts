@@ -48,7 +48,7 @@ const CodeBlockWithSafeFences = CodeBlockLowlight.extend({
  */
 export interface EditorGlue {
   onNavigateToNote: (noteId: string, inNewTab: boolean) => void
-  getNoteLinkItems: (query: string) => NoteLinkItem[]
+  getNoteLinkItems: (query: string) => NoteLinkItem[] | Promise<NoteLinkItem[]>
   getTemplates: () => Promise<Template[]>
   getCollections: () => CollectionTagItem[]
   onAddToCollection: (collection: CollectionTagItem) => void

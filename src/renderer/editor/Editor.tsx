@@ -3,11 +3,9 @@ import { EditorContent, useEditor } from '@tiptap/react'
 import type { Editor as TipTapEditor } from '@tiptap/core'
 import { invoke } from '../api'
 import { useTabsStore } from '../stores/tabs'
-import { useNotesStore } from '../stores/notes'
 import { useCollectionsStore } from '../stores/collections'
 import { toast } from '../stores/ui'
 import { buildExtensions, type EditorGlue } from './extensions'
-import { filterNotesByTitle } from './extensions/NoteLink'
 import { FormatBar } from './FormatBar'
 import { SuggestionPopup } from './SuggestionPopup'
 
@@ -28,12 +26,9 @@ export default function Editor({ noteId, initialMd, onDocChanged, onEditorBlur, 
         if (inNewTab) tabs.openTab({ kind: 'note', noteId: targetId })
         else tabs.openInCurrentTab({ kind: 'note', noteId: targetId })
       },
-      getNoteLinkItems(query) {
-        const notes = useNotesStore
-          .getState()
-          .items.filter((n) => n.id !== noteId)
-          .map((n) => ({ id: n.id, title: n.title }))
-        return filterNotesByTitle(notes, query)
+      async getNoteLinkItems(query) {
+        const hits = await invoke('search:typeahead', { q: query })
+        return hits.filter((h) => h.noteId !== noteId).map((h) => ({ id: h.noteId, title: h.title }))
       },
       getTemplates: () => invoke('templates:list'),
       getCollections: () => useCollectionsStore.getState().items.map((c) => ({ id: c.id, name: c.name })),

@@ -8,6 +8,7 @@ import { initCommandRegistry } from './commands/registry'
 import { TitlebarRegion } from './shell/TabStrip'
 import { Sidebar } from './shell/Sidebar'
 import { PaneArea } from './shell/PaneArea'
+import { SearchPalette } from './shell/SearchPalette'
 
 function Toasts(): React.JSX.Element {
   const toasts = useUiStore((s) => s.toasts)
@@ -85,6 +86,7 @@ export default function App(): React.JSX.Element {
         {sidebarVisible && <Sidebar />}
         <PaneArea />
       </div>
+      <SearchPalette />
       <Toasts />
     </div>
   )

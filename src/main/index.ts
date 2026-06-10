@@ -1,7 +1,7 @@
 import { app, globalShortcut, nativeTheme } from 'electron'
 import { createMainWindow, getMainWindow } from './windows/mainWindow'
 import { toggleQuickCapture } from './windows/quickCapture'
-import { registerIpcHandlers } from './ipc/handlers'
+import { registerIpcHandlers, getServices } from './ipc/handlers'
 import { push } from './ipc/registry'
 import { buildAppMenu } from './menu'
 import { closeDb } from './db/connection'
@@ -55,6 +55,8 @@ if (process.env.MYMEM_SMOKE) {
 
     app.on('will-quit', () => {
       globalShortcut.unregisterAll()
+      // Drain pending index jobs so a quit inside the 2 s debounce can't leave stale chunks.
+      getServices().indexer.flushAll()
       closeDb()
     })
   }

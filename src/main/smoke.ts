@@ -87,6 +87,46 @@ async function smokeDataSpine(): Promise<void> {
     notes.restore(note.id)
     if (notes.list({ scope: 'all' }).total !== 1) throw new Error('restore failed')
 
+    // ── M3: indexer + keyword search (FTS5 needs the Electron-ABI sqlite) ──
+    const { createIndexer } = await import('./indexing/indexer')
+    const { createSearchService } = await import('./search/searchService')
+    const indexer = createIndexer(dbi)
+    const search = createSearchService(dbi)
+
+    indexer.flushNote(note.id)
+    const hits = search.keyword('updated')
+    if (hits.length !== 1 || hits[0]!.noteId !== note.id) throw new Error('keyword search missed the note')
+    if (!hits[0]!.snippetHtml.includes('<mark>')) throw new Error('snippet missing <mark> highlight')
+
+    if (search.keyword('updated', col.id).length !== 1) throw new Error('collection filter dropped a member note')
+    const otherCol = collections.create({ name: 'Other smoke collection' })
+    if (search.keyword('updated', otherCol.id).length !== 0) throw new Error('collection filter leaked a non-member note')
+
+    // Edit → searchable within the 2 s debounce window (the M3 done-criterion)
+    notes.update(note.id, { contentMd: '# Hello\n\nzanzibar drums' })
+    indexer.enqueue(note.id)
+    if (indexer.pendingCount() !== 1) throw new Error('enqueue did not register a pending job')
+    await new Promise((resolve) => setTimeout(resolve, 2400))
+    if (indexer.pendingCount() !== 0) throw new Error('debounced index job did not drain')
+    if (search.keyword('zanzibar').length !== 1) throw new Error('edit not searchable after debounce window')
+    if (search.keyword('updated').length !== 0) throw new Error('stale chunk survived the reindex')
+
+    // Trash → gone from results instantly (repo drops chunks synchronously)
+    notes.trash(note.id)
+    if (search.keyword('zanzibar').length !== 0) throw new Error('trashed note still in search results')
+    notes.restore(note.id)
+    indexer.flushNote(note.id)
+    if (search.keyword('zanzibar').length !== 1) throw new Error('restore + flush did not reindex')
+
+    // Typeahead: prefix match outranks the newer substring match
+    const prefixNote = notes.create({ title: 'Zanzibar travel log' })
+    notes.create({ title: 'Trip to Zanzibar' })
+    const ahead = search.typeahead('zanz')
+    if (ahead[0]?.noteId !== prefixNote.id) throw new Error('typeahead prefix did not beat substring')
+    if (ahead.length < 2) throw new Error('typeahead substring match missing')
+
+    console.log('[smoke] search spine OK — chunker, hash-diff indexer, FTS keyword + <mark>, instant trash, collection filter, typeahead')
+
     // Reopen (restart persistence)
     closeDb()
     const db2 = getDb()
