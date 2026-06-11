@@ -44,8 +44,8 @@ export function TabStrip(): React.JSX.Element {
             onAuxClick={(e) => {
               if (e.button === 1) useTabsStore.getState().closeTab(tab.id)
             }}
-            className={`group flex min-w-0 max-w-44 cursor-default items-center gap-1 rounded-md px-2.5 py-1 text-[12px] ${
-              active ? 'bg-surface/70 font-medium text-ink shadow-sm' : 'text-ink-muted hover:bg-wash'
+            className={`group flex min-w-0 max-w-44 cursor-default items-center gap-1.5 rounded-full px-3 py-1 text-[12px] ${
+              active ? 'bg-surface font-medium text-ink shadow-sm' : 'text-ink-muted hover:bg-hover'
             }`}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
@@ -59,7 +59,7 @@ export function TabStrip(): React.JSX.Element {
                 e.stopPropagation()
                 useTabsStore.getState().closeTab(tab.id)
               }}
-              className={`shrink-0 rounded px-0.5 text-[11px] leading-none text-ink-muted hover:bg-active hover:text-ink ${
+              className={`shrink-0 rounded-full px-1 text-[11px] leading-none text-ink-muted hover:bg-active hover:text-ink ${
                 active ? '' : 'invisible group-hover:visible'
               }`}
             >
@@ -71,7 +71,7 @@ export function TabStrip(): React.JSX.Element {
       <button
         title="New tab"
         onClick={() => useTabsStore.getState().openTab({ kind: 'home' })}
-        className="shrink-0 rounded-md px-2 py-1 text-[13px] leading-none text-ink-muted hover:bg-hover"
+        className="shrink-0 rounded-full px-2 py-1 text-[13px] leading-none text-ink-muted hover:bg-hover"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         +
@@ -82,8 +82,11 @@ export function TabStrip(): React.JSX.Element {
 
 export function TitlebarRegion(): React.JSX.Element {
   return (
-    <div className="titlebar-drag flex h-13 shrink-0 items-center pl-20 pr-3">
+    <div className="titlebar-drag flex h-13 shrink-0 items-center pl-20 pr-4">
       <TabStrip />
+      <span className="shrink-0 select-none text-[12px] font-semibold tracking-tight text-ink-muted/50">
+        myMem
+      </span>
     </div>
   )
 }
