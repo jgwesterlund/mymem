@@ -72,8 +72,8 @@ let nextToastId = 1
 export const useUiStore = create<UiState>((set) => ({
   sidebarVisible: true,
   searchPaletteOpen: false,
-  rightPanelVisible: false,
-  rightPanelTab: 'headsup',
+  rightPanelVisible: true,
+  rightPanelTab: 'chat',
   rightPanelWidth: RIGHT_PANEL_DEFAULT_W,
   sidebarWidth: SIDEBAR_DEFAULT_W,
   splitRatio: 0.5,
@@ -191,8 +191,10 @@ export async function initUiPersistence(): Promise<void> {
     const blob = await invoke('settings:get', { key: RIGHT_PANEL_KEY })
     if (isValidBlob(blob)) {
       useUiStore.setState({
-        rightPanelVisible: blob.visible,
-        rightPanelTab: blob.tab,
+        // visible/tab are deliberately NOT restored: the chat always greets you
+        // on launch (Cmd+\ toggles freely within the session).
+        rightPanelVisible: true,
+        rightPanelTab: 'chat',
         rightPanelWidth: Number.isFinite(blob.width)
           ? clamp(Math.round(blob.width), RIGHT_PANEL_MIN_W, RIGHT_PANEL_MAX_W)
           : RIGHT_PANEL_DEFAULT_W,
