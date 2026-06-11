@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { invoke, on, pathForFile } from './api'
-import { initTabsPersistence } from './stores/tabs'
+import { initTabsPersistence, useTabsStore } from './stores/tabs'
 import { useNotesStore } from './stores/notes'
 import { useCollectionsStore } from './stores/collections'
 import { useUiStore, initUiPersistence } from './stores/ui'
@@ -59,6 +59,10 @@ export default function App(): React.JSX.Element {
         void useCollectionsStore.getState().refresh() // membership counts
       } else {
         void useCollectionsStore.getState().refresh()
+        if (ev.entity === 'collection' && ev.op === 'delete') {
+          // Hard delete (sidebar, CLI or API): tabs showing it must not go stale.
+          for (const id of ev.ids) useTabsStore.getState().purgeCollection(id)
+        }
       }
     })
     const offTheme = on('theme:changed', ({ dark }) => {

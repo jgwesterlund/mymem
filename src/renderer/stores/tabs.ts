@@ -58,6 +58,9 @@ interface TabsState {
   prevTab: () => void
   navBack: () => void
   navForward: () => void
+  /** A collection was hard-deleted (UI, CLI or API): panes showing it go Home,
+   *  history entries pointing at it are dropped. */
+  purgeCollection: (collectionId: string) => void
 }
 
 /** Content of the active pane of the active tab (zustand selector / imperative). */
@@ -172,6 +175,26 @@ export const useTabsStore = create<TabsState>((set) => ({
 
   prevTab() {
     set((s) => ({ activeTabIndex: (s.activeTabIndex - 1 + s.tabs.length) % s.tabs.length }))
+  },
+
+  purgeCollection(collectionId) {
+    const refersTo = (c: PaneContent): boolean =>
+      c.kind === 'collection' && c.collectionId === collectionId
+    set((s) => ({
+      tabs: s.tabs.map((tab) => ({
+        ...tab,
+        panes: tab.panes.map((pane) => {
+          if (!pane.history.some(refersTo)) return pane
+          const history = pane.history.filter((c) => !refersTo(c))
+          if (history.length === 0) history.push({ kind: 'home' })
+          const wasCurrent = refersTo(pane.content)
+          const historyIndex = wasCurrent
+            ? history.length - 1
+            : Math.max(0, history.findIndex((c) => c === pane.content))
+          return { content: history[historyIndex]!, history, historyIndex }
+        }) as typeof tab.panes
+      }))
+    }))
   },
 
   navBack() {

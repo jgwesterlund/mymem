@@ -33,23 +33,44 @@ function NavItem({
   label,
   onClick,
   active,
-  testId
+  testId,
+  onDelete,
+  deleteTitle
 }: {
   label: string
   onClick: (target: OpenTarget) => void
   active?: boolean
   testId?: string
+  onDelete?: () => void
+  deleteTitle?: string
 }): React.JSX.Element {
   return (
-    <button
+    <div
       data-testid={testId}
+      role="button"
+      tabIndex={0}
       onClick={(e) => onClick(e.metaKey ? 'tab' : e.altKey ? 'pane' : 'self')}
-      className={`w-full truncate rounded-md px-2.5 py-1 text-left text-[13px] ${
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') onClick(e.metaKey ? 'tab' : e.altKey ? 'pane' : 'self')
+      }}
+      className={`group flex w-full cursor-default items-center rounded-md px-2.5 py-1 text-left text-[13px] ${
         active ? 'bg-active font-medium' : 'hover:bg-hover'
       }`}
     >
-      {label}
-    </button>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {onDelete && (
+        <button
+          title={deleteTitle ?? 'Delete'}
+          onClick={(e) => {
+            e.stopPropagation()
+            onDelete()
+          }}
+          className="hidden shrink-0 rounded px-1 text-[12px] leading-none text-ink-muted hover:text-red-600 group-hover:block dark:hover:text-red-400"
+        >
+          ✕
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -234,6 +255,16 @@ export function Sidebar(): React.JSX.Element {
               label={`${c.name} (${c.noteCount})`}
               active={activeContent?.kind === 'collection' && activeContent.collectionId === c.id}
               onClick={(target) => navigate({ kind: 'collection', collectionId: c.id }, target)}
+              deleteTitle="Delete collection"
+              onDelete={() => {
+                if (
+                  window.confirm(
+                    `Delete the collection “${c.name}”? Notes in it are NOT deleted — they just leave the collection.`
+                  )
+                ) {
+                  void invoke('collections:delete', { id: c.id })
+                }
+              }}
             />
           ))}
           {creating && (
