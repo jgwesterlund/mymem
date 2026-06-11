@@ -1,18 +1,18 @@
 ---
 name: mymem
-description: Search, read and write John's local myMem notes via the mym CLI. Use when the user references their notes/anteckningar or asks to save/recall personal knowledge.
+description: Search, read and write the user's local myMem notes via the mym CLI. Use when the user references their notes or asks to save/recall personal knowledge.
 ---
 
 # myMem notes via the `mym` CLI
 
-myMem is John's local-first notes app. The `mym` binary talks to the running
+myMem is the user's local-first notes app. The `mym` binary talks to the running
 app over a unix socket. All note content is **markdown** — both what you read
 and what you write.
 
 ## When to use this skill
 
 - The user asks something they may have written down ("what do my notes say
-  about X", "vad har jag antecknat om...", "did I note the wifi password?")
+  about X", "did I note the wifi password?")
   → **search first**, then read, then answer.
 - The user asks to save findings, decisions, snippets or research results
   → `mym create`.

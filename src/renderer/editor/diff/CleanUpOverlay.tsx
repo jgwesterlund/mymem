@@ -52,11 +52,14 @@ const MAX_REFINEMENTS = 5 // mirrors the main-side cap in ai/cleanup.ts
 export default function CleanUpOverlay({
   noteId,
   baseMd,
+  webPaste = false,
   acceptingRef,
   onClose
 }: {
   noteId: string
   baseMd: string
+  /** Paste-nudge session: main relaxes the length floor and allows debris stripping. */
+  webPaste?: boolean
   /** Set while accept is in flight — NoteView's external-change belt must not
    *  mistake accept's own data:changed push for a conflicting write. */
   acceptingRef: { current: boolean }
@@ -102,7 +105,7 @@ export default function CleanUpOverlay({
     setError(null)
     setCleanedMd(null)
     setRefinesLeft(MAX_REFINEMENTS) // Retry starts a FRESH session — full budget again
-    void invoke('ai:cleanup:start', { noteId })
+    void invoke('ai:cleanup:start', { noteId, webPaste })
       .then(({ sessionId: sid }) => {
         sessionId = sid
         sessionRef.current = sid
@@ -123,7 +126,7 @@ export default function CleanUpOverlay({
       if (sessionId) void invoke('ai:cleanup:cancel', { sessionId })
       sessionRef.current = null
     }
-  }, [noteId, attempt])
+  }, [noteId, webPaste, attempt])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {

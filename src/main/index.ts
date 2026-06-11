@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { app, globalShortcut, nativeTheme } from 'electron'
 import { createMainWindow, getMainWindow } from './windows/mainWindow'
 import { toggleQuickCapture } from './windows/quickCapture'
@@ -48,6 +50,14 @@ if (process.env.MYMEM_SMOKE) {
     void app.whenReady().then(() => {
       registerIpcHandlers()
       buildAppMenu()
+
+      // Dev dock icon: packaged builds get resources/icon.icns via electron-builder;
+      // `electron .` would otherwise show the stock Electron icon (npm run icon
+      // regenerates resources/icon.png — see scripts/make-icon.sh).
+      if (!app.isPackaged && process.platform === 'darwin') {
+        const devIcon = join(app.getAppPath(), 'resources', 'icon.png')
+        if (existsSync(devIcon)) app.dock?.setIcon(devIcon)
+      }
 
       app.setAboutPanelOptions({
         applicationName: 'myMem',

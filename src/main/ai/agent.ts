@@ -49,6 +49,12 @@ const MAX_ITERATIONS = 12
 /** Hard pre-send error above 80% of the context window (deliberate cut: no eliding). */
 const CONTEXT_BUDGET = 0.8
 
+/** MYMEM_AI_DEBUG=1 — main-console trace of model, tools sent, tool rounds and stopReasons. */
+const AI_DEBUG = process.env.MYMEM_AI_DEBUG === '1'
+function dbg(...args: unknown[]): void {
+  if (AI_DEBUG) console.log('[ai-debug]', ...args)
+}
+
 /** Markers for injected user-side context messages — the renderer hides these bubbles. */
 export const WORKSPACE_CONTEXT_PREFIX = '<workspace_context'
 export const ATTACHED_CONTEXT_PREFIX = '<attached_context'
@@ -84,6 +90,10 @@ export function createAgent(deps: AgentDeps) {
     const parts: string[] = []
     for (const chip of chips) {
       if (chip.type === 'note') {
+        // light (v1.1): the content is already in this conversation's transcript
+        // and unchanged — skip re-injection (the "currently viewing" system line
+        // still applies via the active flag).
+        if (chip.light) continue
         const note = deps.services.notes.get(chip.id)
         if (!note || note.trashedAt !== null) continue
         parts.push(`<note id="${note.id}" title="${(note.title || 'Untitled').replace(/"/g, '&quot;')}">\n${note.contentMd}\n</note>`)
@@ -152,20 +162,37 @@ export function createAgent(deps: AgentDeps) {
           messages.push(msg)
         }
 
-        // Context injection: chips when attached; otherwise turn-1 implicit RAG
-        // (rag applies its own guards: ≥5 live notes, sanitizable query, score floor).
-        if (chips.length > 0) {
-          const chipCtx = buildChipsContext(chips)
-          if (chipCtx) persistUser(chipCtx)
-        } else if (isFirstTurn) {
+        // Context injection. Turn-1 implicit RAG runs unless the user MANUALLY
+        // attached anything — the auto chip for the open note (active) must not
+        // suppress it; the two serve different purposes (workspace recall vs the
+        // note in front of the user). Rag applies its own guards: ≥5 live notes,
+        // sanitizable query, score floor.
+        const userAttachedChips = chips.some((c) => !(c.type === 'note' && c.active))
+        if (isFirstTurn && !userAttachedChips) {
           const ragCtx = await deps.rag.buildContext(content)
           if (ragCtx) persistUser(ragCtx)
         }
+        if (chips.length > 0) {
+          const chipCtx = buildChipsContext(chips)
+          if (chipCtx) persistUser(chipCtx)
+        }
         persistUser(content)
 
+        // The renderer marks the chip auto-attached for the open note as active —
+        // the system prompt then anchors "this note" to it (chip CONTENT is already
+        // injected above via buildChipsContext, unchanged M7 path).
+        let viewingNote: { id: string; title: string } | null = null
+        const activeChip = chips.find((c) => c.type === 'note' && c.active)
+        if (activeChip) {
+          const n = deps.services.notes.get(activeChip.id)
+          if (n && n.trashedAt === null) viewingNote = { id: n.id, title: n.title }
+        }
+
         const systemPrompt = buildSystemPrompt({
-          chatInstructions: deps.settings.get<string>('ai.chatInstructions')
+          chatInstructions: deps.settings.get<string>('ai.chatInstructions'),
+          viewingNote
         })
+        dbg(`turn: model=${chat.providerId}/${chat.modelId} tools=${AGENT_TOOLS.length} chips=${chips.length} viewing=${viewingNote?.id ?? 'none'}`)
 
         let final: { message: AssistantMessage; messageId: string } | null = null
 
@@ -190,6 +217,7 @@ export function createAgent(deps: AgentDeps) {
             else if (ev.type === 'thinking_delta') emit({ type: 'thinking', turnId, delta: ev.delta })
           }
           const result = await s.result()
+          dbg(`iteration ${iteration}: stopReason=${result.stopReason}`)
           usage.input += result.usage.input
           usage.output += result.usage.output
           usage.costUsd += result.usage.cost.total
@@ -220,7 +248,9 @@ export function createAgent(deps: AgentDeps) {
           for (const call of toolCalls) {
             if (controller.signal.aborted) break
             emit({ type: 'tool_start', turnId, callId: call.id, name: call.name, label: toolLabel(call) })
+            dbg(`tool_start ${call.name} (${call.id})`)
             const outcome = await executeTool(call, deps.services, undo)
+            dbg(`tool_end ${call.name} ok=${!outcome.isError}${outcome.summary ? ` — ${outcome.summary}` : ''}`)
             const toolMsg: ToolResultMessage = {
               role: 'toolResult',
               toolCallId: call.id,

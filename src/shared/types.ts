@@ -89,6 +89,18 @@ export interface ChatMeta {
 export interface ContextChip {
   type: 'note' | 'collection'
   id: string
+  /**
+   * Set by the renderer on the chip auto-attached for the note open in the
+   * focused pane — drives the "currently viewing" system-prompt line (v1.1).
+   */
+  active?: boolean
+  /**
+   * The note's content was already attached earlier in THIS conversation and
+   * is unchanged since (v1.1): main skips re-injecting the content (no token
+   * bloat / persisted duplicates) but the "currently viewing" line still
+   * applies when active is also set.
+   */
+  light?: boolean
 }
 
 /**

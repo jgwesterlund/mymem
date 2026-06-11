@@ -1,29 +1,50 @@
 # myMem
 
-Mac-native, local-first AI notes app (a mem.ai-style clone). Notes live in a local SQLite
-database with full-text + semantic search; an agentic chat over your knowledge base runs on
-[@earendil-works/pi-ai](https://github.com/earendil-works/pi), so you can sign in with your
-ChatGPT subscription (OpenAI Codex OAuth) or Claude Pro/Max — no API key required.
+Local-first AI notes for Mac — your notes, your models. Sign in with the
+ChatGPT or Claude subscription you already have (OAuth, no API key required);
+everything is stored locally on your machine.
 
-## Stack
+## Features
 
-- Electron 41 (pinned — bundled Node satisfies pi-ai's `node >= 22.19`), ESM throughout
-- React 19 + Zustand + Tailwind v4, TipTap v3 editor (markdown-first)
-- better-sqlite3 (pinned 12.10.0) + FTS5 + sqlite-vec; local embeddings via transformers.js
-- `mym` — Go CLI over a local unix-socket API, with a Claude Code skill in `skills/mymem/`
+- Markdown editor with wikilinks and a slash command menu
+- Collections, plus AI auto-organize to file notes for you
+- Full-text and semantic search (embeddings computed locally, fully offline)
+- Version history for every note
+- Quick capture global hotkey
+- AI chat over your knowledge base with citations — it can also create and
+  edit notes for you
+- AI Clean Up with a diff preview before anything is applied
+- Dark mode
 
-## Status
+## Architecture
 
-All planned milestones are done (M0–M9): data spine and editor, tabs + split panes,
-keyword + semantic deep search, version history / import / export / quick capture, local
-embeddings worker, unix-socket API + CLI + Claude Code skill, agentic chat with citations,
-AI clean-up / auto-organize / titles, and the M9 polish pass (find-in-note, dark mode,
-onboarding, templates, window persistence, keymap + Playwright e2e tests, packaging).
+myMem is an Electron app. Notes live in a local SQLite database — FTS5 for
+keyword search and [sqlite-vec](https://github.com/asg017/sqlite-vec) for
+vector search — with embeddings computed on-device by
+[transformers.js](https://github.com/huggingface/transformers.js) (MiniLM).
+All AI features run through
+[@earendil-works/pi-ai](https://github.com/earendil-works/pi), a
+provider-agnostic LLM client that supports OpenAI Codex OAuth and Claude
+Pro/Max OAuth, so chat works on your existing subscription. Nothing leaves
+your machine except the model calls you explicitly make.
+
+## Install
+
+Build from source (no prebuilt binaries yet):
+
+```sh
+npm install
+npm run dist     # packaged .app/.dmg/.zip in release/ (arm64)
+```
+
+Requirements: macOS (Apple Silicon / arm64), Node >= 22.19. Go is only needed
+if you want the `mym` CLI. Builds are currently **unsigned** — macOS will warn
+on first launch; see the comments in `electron-builder.yml` for enabling
+signing/notarization with your own Developer ID.
 
 ## Develop
 
 ```sh
-npm install        # also fetches Electron-ABI prebuilds for native deps
 npm run dev        # HMR dev server + Electron
 npm run typecheck  # tsc over main/preload, renderer, and tests
 npm test           # vitest unit/component suite
@@ -32,46 +53,69 @@ npm run e2e        # builds, then drives the real app UI with Playwright (_elect
 ```
 
 `MYMEM_SMOKE=1 MYMEM_SMOKE_EMBED=1 electron .` additionally exercises the real
-embeddings worker (downloads the ~23 MB MiniLM model — network required).
+embeddings worker (downloads the ~23 MB MiniLM model — network required). To
+sanity-check a packaged build, run the same smoke against
+`./release/mac-arm64/myMem.app/Contents/MacOS/myMem`.
 
-## Release
+The app icon is generated — `npm run icon` rebuilds it from
+`scripts/make-icon.swift` (see `resources/README.md`). Design notes and known
+issues live in `docs/`.
 
-```sh
-npm run dist       # packaged .app/.dmg/.zip in release/ (arm64)
-```
+## CLI and agent skill
 
-Builds are currently **unsigned** (`identity: null` in `electron-builder.yml`).
-Once a Developer ID Application certificate is in the keychain, remove that line
-and flip `notarize: true` with `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` /
-`APPLE_TEAM_ID` exported in the environment — see the comments in
-`electron-builder.yml`. The app icon goes in `resources/` (see `resources/README.md`).
-
-Sanity-check a packaged build by running the full smoke inside it:
-
-```sh
-MYMEM_SMOKE=1 ./release/mac-arm64/myMem.app/Contents/MacOS/myMem
-MYMEM_SMOKE=1 MYMEM_SMOKE_EMBED=1 ./release/mac-arm64/myMem.app/Contents/MacOS/myMem
-```
-
-## CLI — `mym`
-
-A Go CLI that talks to the running app over a `0600` unix socket
-(`~/Library/Application Support/mymem/api.sock`; `MYMEM_SOCKET` overrides):
+`mym` is a small Go CLI that talks to the running app over a local unix
+socket, so any shell — or any coding agent — can search, read, and write your
+notes. An agent skill (`skills/mymem/SKILL.md`) teaches agents the workflow:
+search first, cite note titles, write markdown.
 
 ```sh
-npm run build:cli                 # builds cli/mym (requires Go)
-./cli/mym status                  # app + index health
-./cli/mym create --title "Idea" "body markdown…"
-./cli/mym get <id-or-title>
-./cli/mym append <id-or-title> "more text"
-./cli/mym search "query"
+npm run build:cli      # builds cli/mym (requires Go)
+npm run install-skill  # installs the skill for every agent detected on your machine
 ```
 
-Also: `list`, `update`, `collections`, `trash`, `related` — run `./cli/mym help`.
-`cd cli && go test ./...` runs its test suite.
+`install-skill` symlinks `skills/mymem` into each agent's skill directory
+(idempotent; `--agent claude|codex|pi|opencode|all` to target one):
 
-## Claude Code skill
+| Agent | Skill location | Notes |
+| --- | --- | --- |
+| [Claude Code](https://code.claude.com/docs/en/skills) | `~/.claude/skills/mymem` | |
+| [Codex CLI](https://developers.openai.com/codex/skills) | `~/.agents/skills/mymem` | Codex's user scope; symlinks officially supported |
+| [pi](https://github.com/earendil-works/pi) | `~/.pi/agent/skills/mymem` | also reads `~/.agents/skills`, so a Codex install already covers it |
+| [opencode](https://opencode.ai/docs/skills/) | `~/.config/opencode/skills/mymem` | also reads `~/.claude/skills` and `~/.agents/skills`, so a Claude/Codex install already covers it |
 
-`skills/mymem/` packages the CLI workflow for coding agents. `npm run install-skill`
-symlinks it into `~/.claude/skills/` (idempotent) so Claude Code can read, search,
-and write your notes through the same socket API.
+All four use the same `SKILL.md` convention (`name` + `description`
+frontmatter), so one skill directory serves every agent. The installer skips
+agents it can't find and never overwrites files it didn't create.
+
+From the shell:
+
+```sh
+mym search "kubernetes notes" --json
+printf '## Decisions\n- v2 endpoints stay REST\n' | mym create --title "API design review" --collection Work -
+mym append 9f3ac2d4 -- '- follow up on X'
+mym related 9f3ac2d4
+```
+
+Also: `status`, `get`, `list`, `update`, `collections`, `trash` — run
+`./cli/mym help`. `cd cli && go test ./...` runs its test suite.
+
+From an agent, just talk:
+
+- *"Check my notes for what we decided about the API design"* — the agent runs
+  `mym search` / `mym get` and answers with citations from your notes.
+- *"Save a note summarizing this conversation"* — the agent writes a markdown
+  note via `mym create` into a sensible collection.
+- *"Add 'rotate the staging certs' to my ops checklist note"* — the agent finds
+  the note and runs `mym append`.
+
+## Security
+
+The API is a unix socket with `0600` permissions
+(`~/Library/Application Support/mymem/api.sock`; `MYMEM_SOCKET` overrides) —
+local-only, current user only, no network listener. There is no telemetry.
+AI provider credentials are encrypted with Electron `safeStorage`, backed by
+the macOS Keychain.
+
+## License
+
+[MIT](LICENSE) © 2026 John Westerlund

@@ -38,6 +38,11 @@ interface UiState {
   exportRequest: number
   /** Bumped by the clean-up command; the mounted NoteView flushes, then opens the overlay. */
   cleanupRequest: number
+  /**
+   * True when the pending cleanupRequest came from the paste-nudge toast —
+   * the session then allows stripping web debris (relaxed length floor).
+   */
+  cleanupWebPaste: boolean
   /** Bumped by Cmd+F; the FOCUSED NoteView opens its FindBar. */
   findRequest: number
   toasts: Toast[]
@@ -56,7 +61,7 @@ interface UiState {
   openOrganize: (noteId: string) => void
   closeOrganize: () => void
   requestExport: () => void
-  requestCleanup: () => void
+  requestCleanup: (webPaste?: boolean) => void
   requestFind: () => void
   showToast: (message: string, action?: Toast['action']) => void
   dismissToast: (id: number) => void
@@ -77,6 +82,7 @@ export const useUiStore = create<UiState>((set) => ({
   organizeNoteId: null,
   exportRequest: 0,
   cleanupRequest: 0,
+  cleanupWebPaste: false,
   findRequest: 0,
   toasts: [],
   toggleSidebar() {
@@ -125,8 +131,8 @@ export const useUiStore = create<UiState>((set) => ({
   requestExport() {
     set((s) => ({ exportRequest: s.exportRequest + 1 }))
   },
-  requestCleanup() {
-    set((s) => ({ cleanupRequest: s.cleanupRequest + 1 }))
+  requestCleanup(webPaste = false) {
+    set((s) => ({ cleanupRequest: s.cleanupRequest + 1, cleanupWebPaste: webPaste }))
   },
   requestFind() {
     set((s) => ({ findRequest: s.findRequest + 1 }))

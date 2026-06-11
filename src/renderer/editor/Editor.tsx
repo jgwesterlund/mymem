@@ -2,10 +2,11 @@ import { useMemo } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import type { Editor as TipTapEditor } from '@tiptap/core'
 import { invoke } from '../api'
-import { openContent } from '../stores/tabs'
+import { getActiveContent, openContent } from '../stores/tabs'
 import { useCollectionsStore } from '../stores/collections'
-import { toast } from '../stores/ui'
+import { toast, useUiStore } from '../stores/ui'
 import { buildExtensions, type EditorGlue } from './extensions'
+import { shouldNudgeForPaste } from './pasteNudge'
 import { FormatBar } from './FormatBar'
 import { SuggestionPopup } from './SuggestionPopup'
 
@@ -16,6 +17,9 @@ export interface EditorProps {
   onEditorBlur: () => void
   onReady: (editor: TipTapEditor) => void
 }
+
+/** Notes already nudged about a big paste — max one Clean Up nudge per note per session. */
+const pasteNudged = new Set<string>()
 
 /** One TipTap instance per mounted NoteView; remounted (fresh undo history) via key. */
 export default function Editor({ noteId, initialMd, onDocChanged, onEditorBlur, onReady }: EditorProps): React.JSX.Element {
@@ -53,7 +57,35 @@ export default function Editor({ noteId, initialMd, onDocChanged, onEditorBlur, 
     contentType: 'markdown',
     shouldRerenderOnTransaction: false,
     editorProps: {
-      attributes: { class: 'editor-prose' }
+      attributes: { class: 'editor-prose' },
+      // Nudge only — returning false leaves TipTap's paste handling (the
+      // Markdown extension's HTML→markdown parsing included) untouched.
+      handlePaste: (_view, event) => {
+        const data = event.clipboardData
+        const pasted = data?.getData('text/plain') || data?.getData('text/html') || ''
+        if (shouldNudgeForPaste(pasted, pasteNudged.has(noteId))) {
+          pasteNudged.add(noteId)
+          // Capture the note the paste landed in: the toast lingers ~8 s and the
+          // user may have moved to another note/tab — requestCleanup targets the
+          // FOCUSED pane, which would clean the WRONG note.
+          const pastedNoteId = noteId
+          useUiStore.getState().showToast('Pasted content — clean it up?', {
+            label: 'Clean Up',
+            onClick: () => {
+              const active = getActiveContent()
+              if (active?.kind === 'note' && active.noteId === pastedNoteId) {
+                useUiStore.getState().requestCleanup(true) // webPaste: debris stripping allowed
+              } else {
+                // Bring the pasted note back instead of cleaning whatever is
+                // focused now (opening + auto-running would race the note load).
+                openContent({ kind: 'note', noteId: pastedNoteId }, 'self')
+                toast('Opened the pasted note — press ⌘⇧U to clean it up')
+              }
+            }
+          })
+        }
+        return false
+      }
     },
     onCreate: ({ editor: e }) => onReady(e),
     onUpdate: ({ editor: e }) => onDocChanged(e),

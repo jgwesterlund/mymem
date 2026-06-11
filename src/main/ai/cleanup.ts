@@ -6,7 +6,7 @@ import type { NotesRepo } from '../db/repos/notesRepo'
 import type { VersionsRepo } from '../db/repos/miscRepos'
 import type { Indexer } from '../indexing/indexer'
 import type { StreamFn } from './agent'
-import { CLEANUP_SYSTEM_PROMPT } from './prompts'
+import { buildCleanupSystemPrompt } from './prompts'
 
 /**
  * Clean Up (Cmd+Shift+U): main-side session API. start streams a full revised
@@ -23,12 +23,21 @@ const MAX_REFINEMENTS = 5
 /** Hard cap: min(12k tokens, a quarter of the model's context window), chars/4. */
 const HARD_CAP_TOKENS = 12_000
 const RATIO_MIN = 0.5
+/**
+ * Web-paste sessions (v1.1) are EXPECTED to shrink a lot — the prompt tells the
+ * model to strip nav/cookie/footer debris, so the strict 0.5 floor would
+ * systematically reject legitimate cleanups. Relaxed floor for the INITIAL
+ * pass only; refines keep the existing rules.
+ */
+const RATIO_MIN_WEB_PASTE = 0.15
 const RATIO_MAX = 2.0
 /** A refine that explicitly asks for a length change lifts the ratio guard. */
 const LENGTH_INTENT = /\b(shorten|shorter|longer|lengthen|expand|trim|condense|cut|förkorta|utöka)\b/i
 
 interface CleanupSession {
   noteId: string
+  /** Paste-nudge session: debris-strip prompt + relaxed initial length floor. */
+  webPaste: boolean
   baseMd: string
   /** note.updatedAt at start — accept refuses when anything wrote the note since. */
   baseUpdatedAt: number
@@ -91,13 +100,21 @@ function unwrapOuterFence(text: string, baseMd: string): string {
 }
 
 /** Returns a violation reason, or null when the candidate passes. */
-export function validateCleanup(baseMd: string, cleanedMd: string, instruction: string | null): string | null {
+export function validateCleanup(
+  baseMd: string,
+  cleanedMd: string,
+  instruction: string | null,
+  webPaste = false
+): string | null {
   if (cleanedMd.trim() === '') return 'empty response'
   if (countCodeBlocks(cleanedMd) !== countCodeBlocks(baseMd)) return 'code-block count changed'
   const lengthIntended = instruction !== null && LENGTH_INTENT.test(instruction)
   if (!lengthIntended && baseMd.length > 0) {
+    // Initial pass of a web-paste session: debris removal legitimately shrinks
+    // the note well past 0.5 — relax the floor. Refines keep the strict rules.
+    const ratioMin = webPaste && instruction === null ? RATIO_MIN_WEB_PASTE : RATIO_MIN
     const ratio = cleanedMd.length / baseMd.length
-    if (ratio < RATIO_MIN || ratio > RATIO_MAX) return 'length changed too much'
+    if (ratio < ratioMin || ratio > RATIO_MAX) return 'length changed too much'
   }
   return null
 }
@@ -117,14 +134,14 @@ export function createCleanupService(deps: CleanupDeps) {
       for (let attempt = 0; attempt < 2; attempt++) {
         const s = streamFn(
           session.model,
-          { systemPrompt: CLEANUP_SYSTEM_PROMPT, messages: session.transcript },
+          { systemPrompt: buildCleanupSystemPrompt(session.webPaste), messages: session.transcript },
           { apiKey, signal: controller.signal }
         )
         const result = await s.result()
         if (result.stopReason === 'aborted' || controller.signal.aborted) return // cancelled — session is gone
         if (result.stopReason === 'error') throw new Error(result.errorMessage ?? 'The model request failed.')
         const cleaned = unwrapOuterFence(textOf(result).trim(), session.baseMd)
-        const reason = validateCleanup(session.baseMd, cleaned, session.lastInstruction)
+        const reason = validateCleanup(session.baseMd, cleaned, session.lastInstruction, session.webPaste)
         if (reason === null) {
           session.latest = cleaned
           deps.pushResult({ sessionId, cleanedMd: cleaned })
@@ -143,7 +160,7 @@ export function createCleanupService(deps: CleanupDeps) {
   }
 
   return {
-    start({ noteId }: { noteId: string }): { sessionId: string } {
+    start({ noteId, webPaste }: { noteId: string; webPaste?: boolean }): { sessionId: string } {
       const note = deps.notes.get(noteId)
       if (!note) throw new Error(`note not found: ${noteId}`)
       if (note.trashedAt !== null) throw new Error('That note is in the trash.')
@@ -162,6 +179,7 @@ export function createCleanupService(deps: CleanupDeps) {
 
       const session: CleanupSession = {
         noteId,
+        webPaste: webPaste === true,
         baseMd: note.contentMd,
         baseUpdatedAt: note.updatedAt,
         transcript: [{ role: 'user', content: `<note>\n${note.contentMd}\n</note>`, timestamp: Date.now() }],

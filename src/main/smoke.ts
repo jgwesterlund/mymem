@@ -752,6 +752,191 @@ async function smokeChatAgent(): Promise<void> {
     )
     if (eCallIds.some((id) => !eResultIds.has(id))) throw new Error('dangling toolCall without toolResult after cancel')
 
+    // ── Scenario F (v1.1): active-note chip → "currently viewing" system-prompt line ──
+    const seenPrompts: string[] = []
+    const scriptedF = (_m: unknown, context: { systemPrompt?: string; messages: { role: string; content: unknown }[] }) => {
+      const s = createAssistantMessageEventStream()
+      queueMicrotask(() => {
+        if (context.systemPrompt?.includes(TITLE_MARKER)) {
+          s.push({ type: 'done', reason: 'stop', message: mkAssistant([{ type: 'text', text: 'Viewing test' }], 'stop') })
+          return
+        }
+        seenPrompts.push(context.systemPrompt ?? '')
+        s.push({ type: 'done', reason: 'stop', message: mkAssistant([{ type: 'text', text: 'Looking at it.' }], 'stop') })
+      })
+      return s
+    }
+    const eventsF: ChatEventT[] = []
+    const agentF = createAgent({
+      chats, settings, services, rag,
+      getApiKey: async () => 'fake-key',
+      resolveModel: () => fakeModel(64000),
+      emit: (_c, _r, ev) => eventsF.push(ev),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      streamFn: scriptedF as any
+    })
+    const chatF = chats.create()
+    chats.setModel(chatF.id, 'fake', 'fake-model')
+    await agentF.runTurn({
+      chatId: chatF.id,
+      requestId: 'r7',
+      content: 'Fix the headings in this note',
+      chips: [{ type: 'note', id: seed.id, active: true }]
+    })
+    if (eventsF.some((e) => e.type === 'error')) {
+      throw new Error(`scenario F errored: ${JSON.stringify(eventsF.find((e) => e.type === 'error'))}`)
+    }
+    const fPrompt = seenPrompts[0] ?? ''
+    if (!fPrompt.includes('currently viewing') || !fPrompt.includes(`mymem://note/${seed.id}`)) {
+      throw new Error('active-note chip did not add the "currently viewing" line to the system prompt')
+    }
+    if (!fPrompt.includes('NEVER claim you cannot create or edit notes')) {
+      throw new Error('capability block missing from the system prompt')
+    }
+    // Chip CONTENT still rides the unchanged M7 path: an <attached_context> user message.
+    const fMsgs = chats.messages(chatF.id)
+    if (!fMsgs.some((m) => m.role === 'user' && String((m.content as { content?: unknown }).content).startsWith('<attached_context'))) {
+      throw new Error('active chip content was not injected as attached_context')
+    }
+    // A chip WITHOUT the active flag must not claim "currently viewing".
+    await agentF.runTurn({ chatId: chatF.id, requestId: 'r8', content: 'And in general?', chips: [{ type: 'note', id: seed.id }] })
+    if ((seenPrompts[1] ?? '').includes('currently viewing')) {
+      throw new Error('non-active chip must not add the currently-viewing line')
+    }
+    await waitFor(() => chats.get(chatF.id)!.title === 'Viewing test', 5000, 'scenario F chat title')
+    console.log('[smoke] v1.1 active-note chip OK — currently-viewing line + capability block in the system prompt, attached_context unchanged, non-active chip adds no line')
+
+    // ── Scenario G (v1.1): light active chip — note content attached ONCE per conversation ──
+    const seenPromptsG: string[] = []
+    const scriptedG = (_m: unknown, context: { systemPrompt?: string }) => {
+      const s = createAssistantMessageEventStream()
+      queueMicrotask(() => {
+        if (context.systemPrompt?.includes(TITLE_MARKER)) {
+          s.push({ type: 'done', reason: 'stop', message: mkAssistant([{ type: 'text', text: 'Light test' }], 'stop') })
+          return
+        }
+        seenPromptsG.push(context.systemPrompt ?? '')
+        s.push({ type: 'done', reason: 'stop', message: mkAssistant([{ type: 'text', text: 'noted' }], 'stop') })
+      })
+      return s
+    }
+    const eventsG: ChatEventT[] = []
+    const agentG = createAgent({
+      chats, settings, services, rag,
+      getApiKey: async () => 'fake-key',
+      resolveModel: () => fakeModel(64000),
+      emit: (_c, _r, ev) => eventsG.push(ev),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      streamFn: scriptedG as any
+    })
+    const chatG = chats.create()
+    chats.setModel(chatG.id, 'fake', 'fake-model')
+    const userMessagesOf = (chatId: string): string[] =>
+      chats
+        .messages(chatId)
+        .filter((m) => m.role === 'user')
+        .map((m) => String((m.content as { content?: unknown }).content))
+    const attachedCount = (chatId: string): number =>
+      userMessagesOf(chatId).filter((t) => t.startsWith('<attached_context')).length
+
+    // Turn 1: full chip → content injected once.
+    await agentG.runTurn({
+      chatId: chatG.id, requestId: 'g1', content: 'Summarize this note',
+      chips: [{ type: 'note', id: seed.id, active: true }]
+    })
+    if (attachedCount(chatG.id) !== 1) throw new Error('turn 1 must attach the note content exactly once')
+    // Turn 2: note unchanged → the renderer sends the chip LIGHT; main must NOT
+    // re-inject content, but the currently-viewing line still applies.
+    await agentG.runTurn({
+      chatId: chatG.id, requestId: 'g2', content: 'Now as bullet points',
+      chips: [{ type: 'note', id: seed.id, active: true, light: true }]
+    })
+    if (eventsG.some((e) => e.type === 'error')) {
+      throw new Error(`scenario G errored: ${JSON.stringify(eventsG.find((e) => e.type === 'error'))}`)
+    }
+    if (attachedCount(chatG.id) !== 1) {
+      throw new Error('light chip re-injected the note content (expected exactly ONE attached_context across the transcript)')
+    }
+    if (!(seenPromptsG[1] ?? '').includes('currently viewing')) {
+      throw new Error('light chip lost the currently-viewing system-prompt line')
+    }
+    // Note edited → the renderer re-sends a FULL chip → content re-attached once.
+    notes.update(seed.id, { contentMd: 'original flux body\n\nedited between turns' })
+    await agentG.runTurn({
+      chatId: chatG.id, requestId: 'g3', content: 'And after my edit?',
+      chips: [{ type: 'note', id: seed.id, active: true }]
+    })
+    if (attachedCount(chatG.id) !== 2) throw new Error('edited note must be re-attached on the next turn')
+    if (!userMessagesOf(chatG.id).some((t) => t.startsWith('<attached_context') && t.includes('edited between turns'))) {
+      throw new Error('the re-attached content is not the edited note')
+    }
+    await waitFor(() => chats.get(chatG.id)!.title === 'Light test', 5000, 'scenario G chat title')
+    console.log('[smoke] v1.1 light chip OK — content attached once per conversation, currently-viewing line kept, note edit re-attaches')
+
+    // ── Scenario H (v1.1): turn-1 implicit RAG runs ALONGSIDE the auto chip ──
+    // ≥5 live notes (RAG floor) with an FTS hit for the query; no embedder wired
+    // → keyword path, which has no score floor.
+    const ragSeeds = Array.from({ length: 5 }, (_, i) =>
+      notes.create({ title: `Fluxsmoke ${i}`, contentMd: `fluxsmoke finding number ${i} from the bench` })
+    )
+    for (const n of ragSeeds) indexer.flushNote(n.id)
+    const scriptedH = (_m: unknown, context: { systemPrompt?: string }) => {
+      const s = createAssistantMessageEventStream()
+      queueMicrotask(() => {
+        if (context.systemPrompt?.includes(TITLE_MARKER)) {
+          s.push({ type: 'done', reason: 'stop', message: mkAssistant([{ type: 'text', text: 'Rag test' }], 'stop') })
+          return
+        }
+        s.push({ type: 'done', reason: 'stop', message: mkAssistant([{ type: 'text', text: 'found it' }], 'stop') })
+      })
+      return s
+    }
+    const eventsH: ChatEventT[] = []
+    const agentH = createAgent({
+      chats, settings, services, rag,
+      getApiKey: async () => 'fake-key',
+      resolveModel: () => fakeModel(64000),
+      emit: (_c, _r, ev) => eventsH.push(ev),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      streamFn: scriptedH as any
+    })
+    const chatH = chats.create()
+    chats.setModel(chatH.id, 'fake', 'fake-model')
+    await agentH.runTurn({
+      chatId: chatH.id, requestId: 'h1', content: 'fluxsmoke',
+      chips: [{ type: 'note', id: ragSeeds[0]!.id, active: true }] // ONLY the auto chip
+    })
+    if (eventsH.some((e) => e.type === 'error')) {
+      throw new Error(`scenario H errored: ${JSON.stringify(eventsH.find((e) => e.type === 'error'))}`)
+    }
+    const hUser = userMessagesOf(chatH.id)
+    if (!hUser.some((t) => t.startsWith('<workspace_context'))) {
+      throw new Error('the auto chip suppressed turn-1 implicit RAG (workspace_context missing)')
+    }
+    if (!hUser.some((t) => t.startsWith('<attached_context'))) {
+      throw new Error('auto-chip content missing alongside RAG (attached_context)')
+    }
+    // A MANUALLY attached chip still suppresses turn-1 RAG.
+    const chatH2 = chats.create()
+    chats.setModel(chatH2.id, 'fake', 'fake-model')
+    await agentH.runTurn({
+      chatId: chatH2.id, requestId: 'h2', content: 'fluxsmoke',
+      chips: [
+        { type: 'note', id: ragSeeds[0]!.id, active: true },
+        { type: 'note', id: ragSeeds[1]!.id } // user-added → skip RAG
+      ]
+    })
+    const h2User = userMessagesOf(chatH2.id)
+    if (h2User.some((t) => t.startsWith('<workspace_context'))) {
+      throw new Error('a manually attached chip must still suppress turn-1 RAG')
+    }
+    if (!h2User.some((t) => t.startsWith('<attached_context'))) {
+      throw new Error('manual + auto chips lost their attached_context')
+    }
+    await waitFor(() => chats.get(chatH.id)!.title === 'Rag test', 5000, 'scenario H chat title')
+    await waitFor(() => chats.get(chatH2.id)!.title === 'Rag test', 5000, 'scenario H2 chat title')
+    console.log('[smoke] v1.1 turn-1 RAG OK — auto chip injects workspace_context AND attached_context; manual chips still skip RAG')
+
     // ── Credentials: safeStorage roundtrip (or the disabled path when unavailable) ──
     const creds = createCredentialsStore(settings)
     const providers = createProviderManager({ credentials: creds, settings, onDeviceCode: () => {} })
@@ -854,7 +1039,7 @@ async function smokeAiFeatures(): Promise<void> {
     // ── Clean Up ──────────────────────────────────────────────────────────────
     const pushes: CleanupPush[] = []
     const mkCleanup = (
-      script: (call: number, context: { messages: { role: string; content: unknown }[] }, options: { signal?: AbortSignal }) => AssistantMessage | 'hold'
+      script: (call: number, context: { systemPrompt?: string; messages: { role: string; content: unknown }[] }, options: { signal?: AbortSignal }) => AssistantMessage | 'hold'
     ) => {
       let calls = 0
       const svc = createCleanupService({
@@ -971,6 +1156,52 @@ async function smokeAiFeatures(): Promise<void> {
     if (result.sessionId !== r2.sessionId || !result.error) throw new Error('double ratio violation must push an error')
     if (shrink.calls() !== 2) throw new Error('ratio violation must retry exactly once before erroring')
 
+    // v1.1 web-paste sessions: the prompt licenses stripping nav/cookie/footer
+    // debris, so the initial pass gets the relaxed 0.15 floor — a ~70%-shrunk
+    // response passes; the SAME response in a NORMAL session must still error.
+    const webDebris = [
+      'Home | Products | Pricing | Blog | About | Contact | Careers | Support',
+      'We use cookies to improve your experience. Accept all  ·  Manage preferences  ·  Reject non-essential',
+      'Share on X  ·  Share on LinkedIn  ·  Copy link  ·  Subscribe to our newsletter',
+      '© 2026 Example Corp · Privacy Policy · Terms of Service · Sitemap · Do Not Sell My Info'
+    ].join('\n\n')
+    const webClean =
+      '# The actual article\n\nOne tight paragraph of real substance that must survive the cleanup, including every fact, name and number the page actually carried in its body text.'
+    const webBase = `${webDebris}\n\n${webClean}\n\n${webDebris}`
+    const webRatio = webClean.length / webBase.length
+    if (webRatio < 0.13 || webRatio > 0.45) throw new Error(`web-paste fixture drifted out of band (ratio ${webRatio.toFixed(2)})`)
+    const webNote = notes.create({ title: 'Pasted article', contentMd: webBase })
+    const webPrompts: string[] = []
+    const webSvc = mkCleanup((_call, context) => {
+      webPrompts.push(context.systemPrompt ?? '')
+      return textMsg(webClean)
+    })
+    since = pushes.length
+    const w1 = webSvc.svc.start({ noteId: webNote.id, webPaste: true })
+    result = await awaitPush(since)
+    if (result.sessionId !== w1.sessionId || result.cleanedMd !== webClean) {
+      throw new Error(`webPaste cleanup rejected a legitimate debris strip: ${JSON.stringify(result)}`)
+    }
+    if (webSvc.calls() !== 1) throw new Error('webPaste debris strip must pass on the first attempt (no retry)')
+    if (!webPrompts[0]!.includes('remove that debris')) throw new Error('webPaste prompt is missing the debris-removal line')
+    if (!webPrompts[0]!.includes('except web-paste debris')) throw new Error('webPaste prompt is missing the never-drop carve-out')
+    webSvc.svc.cancel({ sessionId: w1.sessionId })
+
+    const normPrompts: string[] = []
+    const normSvc = mkCleanup((_call, context) => {
+      normPrompts.push(context.systemPrompt ?? '')
+      return textMsg(webClean)
+    })
+    since = pushes.length
+    const w2 = normSvc.svc.start({ noteId: webNote.id }) // NO webPaste — strict contract
+    result = await awaitPush(since)
+    if (result.sessionId !== w2.sessionId || !result.error || !result.error.includes('length')) {
+      throw new Error(`normal session must keep rejecting the 70% shrink: ${JSON.stringify(result)}`)
+    }
+    if (normSvc.calls() !== 2) throw new Error('normal-session shrink must retry once before erroring')
+    if (normPrompts[0]!.includes('debris')) throw new Error('normal cleanup prompt must not mention web debris')
+    if (normPrompts[0]!.includes('except web-paste')) throw new Error('normal cleanup prompt must not carry the carve-out')
+
     // Too-long note → immediate error, zero model calls
     const longNote = notes.create({ title: 'Long', contentMd: 'x'.repeat(49_000) })
     const toolong = mkCleanup(() => textMsg(cleanedMd))
@@ -1026,7 +1257,7 @@ async function smokeAiFeatures(): Promise<void> {
       throw new Error('stale accept must not commit a pre_cleanup snapshot')
     }
 
-    console.log('[smoke] M8 cleanup OK — happy path, refine transcript + cap 5, accept (pre_cleanup + reindex + data:changed ai), empty→retry, ratio error, hard length cap, mid-generation cancel, stale-base accept veto')
+    console.log('[smoke] M8 cleanup OK — happy path, refine transcript + cap 5, accept (pre_cleanup + reindex + data:changed ai), empty→retry, ratio error, webPaste relaxed floor + debris prompt (normal stays strict), hard length cap, mid-generation cancel, stale-base accept veto')
 
     // ── Auto-organize ─────────────────────────────────────────────────────────
     collections.create({ name: 'Work' })

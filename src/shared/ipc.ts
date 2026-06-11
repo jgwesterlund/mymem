@@ -184,7 +184,10 @@ export interface IpcInvokeMap {
   'chats:delete': { args: [{ chatId: string }]; result: { ok: true } }
   'chat:saveAsNote': { args: [{ chatId: string; messageId: string }]; result: Note }
   'ai:cleanup:start': {
-    args: [{ noteId: string }]
+    // webPaste (v1.1): set by the paste-nudge toast path — relaxes the cleanup
+    // contract to allow stripping web debris (nav/cookie/footer junk). Optional
+    // and absent for ordinary Cmd+Shift+U cleanups (backward compatible).
+    args: [{ noteId: string; webPaste?: boolean }]
     result: { sessionId: string }
   }
   'ai:cleanup:refine': {

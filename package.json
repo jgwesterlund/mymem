@@ -19,6 +19,7 @@
     "smoke": "npm run build && MYMEM_SMOKE=1 electron .",
     "e2e": "npm run build && playwright test",
     "build:cli": "cd cli && go build -o mym .",
+    "icon": "bash scripts/make-icon.sh",
     "install-skill": "node scripts/install-skill.mjs",
     "dist": "npm run build && electron-builder --mac",
     "postinstall": "electron-builder install-app-deps"

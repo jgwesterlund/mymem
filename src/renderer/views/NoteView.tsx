@@ -63,6 +63,9 @@ export default function NoteView({
   // Base markdown of the open cleanup session (captured ONCE at open, post-flush);
   // null = overlay closed.
   const [cleanupBase, setCleanupBase] = useState<string | null>(null)
+  // Paste-nudge origin of the open session (captured with cleanupBase): the
+  // session may then strip web debris under the relaxed length floor.
+  const [cleanupWebPaste, setCleanupWebPaste] = useState(false)
   // True while the overlay's accept invoke is in flight — its own data:changed
   // (origin 'ai') push must not trip the external-change belt below.
   const cleanupAccepting = useRef(false)
@@ -172,7 +175,10 @@ export default function NoteView({
     if (cleanupRequest === lastCleanupReq.current) return
     lastCleanupReq.current = cleanupRequest
     if (!focused || save.current.disabled) return
-    void flushRef.current().then(() => setCleanupBase(currentMd() ?? save.current.lastMd))
+    void flushRef.current().then(() => {
+      setCleanupWebPaste(useUiStore.getState().cleanupWebPaste)
+      setCleanupBase(currentMd() ?? save.current.lastMd)
+    })
   }, [cleanupRequest, currentMd, focused])
 
   // Find in note (Cmd+F): the focused pane opens (or refocuses) its FindBar.
@@ -422,6 +428,15 @@ export default function NoteView({
           />
           <div className="flex shrink-0 items-baseline gap-3 text-[11px] text-ink-muted">
             <span>{savedLabel}</span>
+            {/* Same path as ⌘⇧U: the FOCUSED NoteView flushes, then opens the
+                overlay (the click focused this pane via PaneArea's capture). */}
+            <button
+              title="Clean Up with AI (⌘⇧U)"
+              onClick={() => useUiStore.getState().requestCleanup()}
+              className="hover:text-ink"
+            >
+              🧹 Clean Up
+            </button>
             <button
               title="Version History"
               onClick={() => useUiStore.getState().openHistory(noteId)}
@@ -510,6 +525,7 @@ export default function NoteView({
         <CleanUpOverlay
           noteId={noteId}
           baseMd={cleanupBase}
+          webPaste={cleanupWebPaste}
           acceptingRef={cleanupAccepting}
           onClose={() => setCleanupBase(null)}
         />

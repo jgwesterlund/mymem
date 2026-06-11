@@ -1,6 +1,11 @@
 /** System prompt assembly for the chat agent. Pure string building — no Electron imports. */
 
-export function buildSystemPrompt(opts: { chatInstructions?: string | null; now?: Date }): string {
+export function buildSystemPrompt(opts: {
+  chatInstructions?: string | null
+  /** Note open in the focused pane when the turn was sent (the active context chip). */
+  viewingNote?: { id: string; title: string } | null
+  now?: Date
+}): string {
   const now = opts.now ?? new Date()
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const stamp = now.toLocaleString('en-US', {
@@ -18,6 +23,7 @@ export function buildSystemPrompt(opts: { chatInstructions?: string | null; now?
     `You are the myMem assistant: you live inside John's local, private notes app and help him search, read, organize and edit his notes. Be concise and direct; answer in the language the user writes in.`,
     `Current date and time: ${stamp} (${timeZone}). Use this for anything time-relative ("yesterday", "this week", recency).`,
     `CITATIONS — when you use information from a note, cite it inline as a markdown link: [Note Title](mymem://note/<id>). Use ids exactly as returned by tools — never invent or guess ids. Do not use footnote markers.`,
+    `CAPABILITIES — you CAN create notes (create_note) and edit notes (update_note). When the user asks you to write, save, draft, edit, fix or reformat something — DO it with the tools instead of only replying in chat. NEVER claim you cannot create or edit notes.`,
     [
       'Tool usage:',
       '- Search your tools before answering questions about the user\'s knowledge, projects or past writing — do not answer from memory alone.',
@@ -27,6 +33,13 @@ export function buildSystemPrompt(opts: { chatInstructions?: string | null; now?
       '- If a tool returns an error, explain it briefly instead of retrying the identical call.'
     ].join('\n')
   ]
+
+  if (opts.viewingNote) {
+    const title = opts.viewingNote.title || 'Untitled'
+    parts.push(
+      `The user is currently viewing [${title}](mymem://note/${opts.viewingNote.id}). Requests like "this note" refer to it.`
+    )
+  }
 
   const instructions = opts.chatInstructions?.trim()
   if (instructions) {
@@ -39,14 +52,29 @@ export function buildSystemPrompt(opts: { chatInstructions?: string | null; now?
 export const TITLE_SYSTEM_PROMPT =
   'You name chat conversations. Reply with ONLY a title of 3-6 plain words for the conversation — no quotes, no trailing punctuation.'
 
-/** Clean Up (M8): full markdown in → full revised markdown out, nothing else. */
-export const CLEANUP_SYSTEM_PROMPT = [
-  'You clean up notes in a personal notes app. The user sends one note as markdown inside <note> tags; you return a tidied version of it.',
-  'Fix grammar, spelling and punctuation. Normalize heading structure (sensible levels, no skipped levels) and list structure (consistent markers, sane nesting). Keep the note in the language it is written in.',
-  'PRESERVE the meaning and every fact, name, number, date and detail. Keep every link exactly as written — mymem:// links VERBATIM. Keep code blocks VERBATIM, including fences and language tags. Keep checkbox states ([ ] / [x]) exactly as they are.',
-  'NEVER summarize, shorten or drop content unless the user explicitly asks for it in a refinement.',
-  'Output ONLY the full revised markdown of the note — no preamble, no commentary, no surrounding code fence.'
-].join('\n')
+/**
+ * Clean Up (M8): full markdown in → full revised markdown out, nothing else.
+ * webPaste (v1.1): only the paste-nudge toast path licenses stripping web
+ * debris — ordinary Cmd+Shift+U cleanups keep the strict preserve-everything
+ * contract (no debris line, no carve-out), matching the strict length guard.
+ */
+export function buildCleanupSystemPrompt(webPaste = false): string {
+  const parts = [
+    'You clean up notes in a personal notes app. The user sends one note as markdown inside <note> tags; you return a tidied version of it.',
+    'Fix grammar, spelling and punctuation. Normalize heading structure (sensible levels, no skipped levels) and list structure (consistent markers, sane nesting). Keep the note in the language it is written in.',
+    'PRESERVE the meaning and every fact, name, number, date and detail. Keep every link exactly as written — mymem:// links VERBATIM. Keep code blocks VERBATIM, including fences and language tags. Keep checkbox states ([ ] / [x]) exactly as they are.'
+  ]
+  if (webPaste) {
+    parts.push(
+      'This note was just pasted from a web page. Such pastes often carry leftover navigation menus, cookie/consent banners, share buttons and footer junk — remove that debris and normalize headings and links, but preserve all of the substance (the article/body content itself).',
+      'NEVER summarize, shorten or drop content unless the user explicitly asks for it in a refinement — except web-paste debris as described above.'
+    )
+  } else {
+    parts.push('NEVER summarize, shorten or drop content unless the user explicitly asks for it in a refinement.')
+  }
+  parts.push('Output ONLY the full revised markdown of the note — no preamble, no commentary, no surrounding code fence.')
+  return parts.join('\n')
+}
 
 /** Auto-organize (M8): forced single file_note tool call (instruction-forced on Codex). */
 export const ORGANIZE_SYSTEM_PROMPT = [

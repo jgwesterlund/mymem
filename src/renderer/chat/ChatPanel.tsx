@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { invoke } from '../api'
 import { useChatStore, type ChatItem, type Chip } from '../stores/chat'
 import { useCollectionsStore } from '../stores/collections'
+import { useNotesStore } from '../stores/notes'
+import { useTabsStore, selectActiveContent } from '../stores/tabs'
 import { useUiStore } from '../stores/ui'
 import { ChatMarkdown } from './ChatMarkdown'
 
@@ -175,6 +177,10 @@ function ChipPicker({ onClose }: { onClose: () => void }): React.JSX.Element {
   )
 }
 
+// Titles resolved via notes:get for notes the 500-item notes-store cache missed
+// (module-level so a re-render / panel toggle never re-fetches the same note).
+const noteTitleFallbacks = new Map<string, string>()
+
 function Composer(): React.JSX.Element {
   const [text, setText] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -183,6 +189,47 @@ function Composer(): React.JSX.Element {
   const model = useChatStore((s) => s.model)
   const modelLocked = useChatStore((s) => s.modelLocked)
   const modelChoices = useChatStore((s) => s.modelChoices)
+  const activeChipDismissed = useChatStore((s) => s.activeChipDismissed)
+  // Auto-attached chip for the note open in the focused pane (mem-parity, v1.1):
+  // send() recomputes the same selector — this renders what will be sent.
+  const activeContent = useTabsStore(selectActiveContent)
+  const activeNoteId = activeContent?.kind === 'note' ? activeContent.noteId : null
+  // undefined = cache miss (the store holds only the newest 500 notes) — fall
+  // back to one notes:get instead of mislabeling the chip 'Untitled'.
+  const cachedNoteTitle = useNotesStore((s) => {
+    if (!activeNoteId) return null
+    const n = s.items.find((x) => x.id === activeNoteId)
+    return n ? n.title || 'Untitled' : undefined
+  })
+  const [fetchedTitle, setFetchedTitle] = useState<string | null>(null)
+  const cacheMiss = activeNoteId !== null && cachedNoteTitle === undefined
+  useEffect(() => {
+    setFetchedTitle(null)
+    if (!cacheMiss || !activeNoteId) return
+    const hit = noteTitleFallbacks.get(activeNoteId)
+    if (hit !== undefined) {
+      setFetchedTitle(hit)
+      return
+    }
+    let alive = true
+    void invoke('notes:get', { id: activeNoteId })
+      .then((n) => {
+        const title = n.title || 'Untitled'
+        noteTitleFallbacks.set(activeNoteId, title)
+        if (alive) setFetchedTitle(title)
+      })
+      .catch(() => {
+        // Note gone — the chip disappears with the pane content shortly anyway.
+      })
+    return () => {
+      alive = false
+    }
+  }, [activeNoteId, cacheMiss])
+  const activeNoteTitle = activeNoteId ? cachedNoteTitle ?? fetchedTitle ?? 'Untitled' : null
+  const showActiveChip =
+    activeNoteId !== null &&
+    !activeChipDismissed &&
+    !chips.some((c) => c.type === 'note' && c.id === activeNoteId)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   function submit(): void {
@@ -199,6 +246,20 @@ function Composer(): React.JSX.Element {
   return (
     <div className="shrink-0 border-t border-hairline p-2">
       <div className="relative flex flex-wrap items-center gap-1 pb-1">
+        {showActiveChip && (
+          <span
+            title="The note you're viewing — attached automatically. Remove to leave it out of this conversation."
+            className="flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[11px]"
+          >
+            📄 <span className="max-w-32 truncate">{activeNoteTitle}</span>
+            <button
+              onClick={() => useChatStore.getState().dismissActiveChip()}
+              className="text-ink-muted hover:text-ink"
+            >
+              ✕
+            </button>
+          </span>
+        )}
         {chips.map((chip) => (
           <span
             key={`${chip.type}:${chip.id}`}
@@ -231,7 +292,7 @@ function Composer(): React.JSX.Element {
           }
         }}
         rows={Math.min(6, Math.max(2, text.split('\n').length))}
-        placeholder="Ask about your notes…"
+        placeholder="Ask — or tell me to create or edit notes…"
         className="w-full resize-none rounded-lg border border-hairline bg-surface-dim px-2.5 py-1.5 text-[13px] outline-none focus:border-accent/50"
         style={{ userSelect: 'text' }}
       />
@@ -354,9 +415,12 @@ export function ChatPanel(): React.JSX.Element {
                   </button>
                 </div>
               ) : (
-                <p className="mt-8 text-center text-[12px] text-ink-muted">
-                  Ask anything about your notes. The first question pulls in relevant notes automatically.
-                </p>
+                <div className="mt-8 text-center text-[12px] text-ink-muted">
+                  <p>Ask anything about your notes. The first question pulls in relevant notes automatically.</p>
+                  <p className="mt-2">
+                    I can also create and edit notes — try “Save this as a note” or “Fix the headings in this note”.
+                  </p>
+                </div>
               ))}
             {items.map((item) => (
               <Message key={item.key} item={item} />
