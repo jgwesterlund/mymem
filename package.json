@@ -17,6 +17,8 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
     "smoke": "npm run build && MYMEM_SMOKE=1 electron .",
+    "build:cli": "cd cli && go build -o mym .",
+    "install-skill": "node scripts/install-skill.mjs",
     "dist": "npm run build && electron-builder --mac",
     "postinstall": "electron-builder install-app-deps"
   },

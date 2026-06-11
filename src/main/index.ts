@@ -5,6 +5,7 @@ import { registerIpcHandlers, getServices } from './ipc/handlers'
 import { push } from './ipc/registry'
 import { buildAppMenu } from './menu'
 import { closeDb } from './db/connection'
+import { startApiServer, stopApiServer } from './api/server'
 import { runSmoke } from './smoke'
 
 // Smoke mode: verify native/ESM deps load inside Electron, then exit. No windows.
@@ -34,6 +35,12 @@ if (process.env.MYMEM_SMOKE) {
       buildAppMenu()
       createMainWindow()
 
+      // Local agent API (M6): unix socket in userData, same services as the UI.
+      // A failed start must never take the app down — log and continue.
+      startApiServer(getServices()).catch((err) => {
+        console.error('[api] failed to start', err)
+      })
+
       // System appearance → renderer .dark class (initial push: did-finish-load
       // in mainWindow.ts — full dark-mode QA stays M9).
       nativeTheme.on('updated', () => {
@@ -55,6 +62,7 @@ if (process.env.MYMEM_SMOKE) {
 
     app.on('will-quit', () => {
       globalShortcut.unregisterAll()
+      stopApiServer()
       // Drain pending index jobs so a quit inside the 2 s debounce can't leave stale chunks.
       getServices().indexer.flushAll()
       getServices().embedder.stop() // no restarts after this — embedded=0 backlog drains next boot

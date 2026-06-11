@@ -40,6 +40,7 @@ export async function runSmoke(): Promise<number> {
     db.close()
 
     await smokeDataSpine()
+    await smokeApiAndCli()
 
     // Real end-to-end embeddings (network, ~23 MB model download) — opt-in only.
     if (process.env.MYMEM_SMOKE_EMBED) await smokeRealEmbeddings()
@@ -160,6 +161,229 @@ async function smokeRealEmbeddings(): Promise<void> {
     const { closeDb } = await import('./db/connection')
     closeDb()
     delete process.env.MYMEM_DB_PATH
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * M6: the REAL api server on a temp unix socket (MYMEM_SOCKET) over a temp DB
+ * and real services, exercised in-process with Node http; then — when `go` is
+ * on PATH — the real `mym` binary is built and run against the same socket.
+ */
+async function smokeApiAndCli(): Promise<void> {
+  const { mkdtempSync, rmSync, statSync, existsSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const http = await import('node:http')
+  const { execFile, execFileSync } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  const { app } = await import('electron')
+  const execFileAsync = promisify(execFile)
+
+  const dir = mkdtempSync(join(tmpdir(), 'mymem-smoke-api-'))
+  process.env.MYMEM_DB_PATH = join(dir, 'smoke.db')
+  const sock = join(dir, 'api.sock')
+  process.env.MYMEM_SOCKET = sock
+  let drainIndexer: (() => void) | null = null
+  try {
+    const { getDb } = await import('./db/connection')
+    const { createNotesRepo } = await import('./db/repos/notesRepo')
+    const { createCollectionsRepo } = await import('./db/repos/collectionsRepo')
+    const { createVersionsRepo } = await import('./db/repos/miscRepos')
+    const { createIndexer } = await import('./indexing/indexer')
+    const { createSearchService } = await import('./search/searchService')
+    const { createRelatedService } = await import('./search/relatedService')
+    const { createVersionsService } = await import('./services/versionsService')
+    const { startApiServer } = await import('./api/server')
+
+    const dbi = getDb()
+    const notes = createNotesRepo(dbi)
+    const collections = createCollectionsRepo(dbi)
+    const versions = createVersionsRepo(dbi)
+    const indexer = createIndexer(dbi)
+    drainIndexer = () => indexer.flushAll() // pending 2 s debounce timers must not outlive closeDb
+    const search = createSearchService(dbi) // no embedder → deep must fall back to keyword
+    const related = createRelatedService(dbi)
+    const versionsService = createVersionsService(dbi, { notes, versions })
+
+    const started = await startApiServer({ notes, collections, search, related, indexer, versionsService })
+    if (!started) throw new Error('api server did not start on the smoke socket')
+    if ((statSync(sock).mode & 0o777) !== 0o600) throw new Error('api socket is not chmod 0600')
+
+    type Res = { status: number; json: any }
+    const req = (method: string, path: string, body?: unknown): Promise<Res> =>
+      new Promise((resolve, reject) => {
+        const payload = body === undefined ? undefined : JSON.stringify(body)
+        const r = http.request(
+          {
+            socketPath: sock,
+            path,
+            method,
+            headers: payload
+              ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }
+              : {}
+          },
+          (res) => {
+            let data = ''
+            res.setEncoding('utf8')
+            res.on('data', (c) => (data += c))
+            res.on('end', () => {
+              try {
+                resolve({ status: res.statusCode ?? 0, json: data ? JSON.parse(data) : null })
+              } catch (err) {
+                reject(err)
+              }
+            })
+          }
+        )
+        r.on('error', reject)
+        if (payload) r.write(payload)
+        r.end()
+      })
+
+    // status
+    const st = await req('GET', '/status')
+    if (st.status !== 200 || st.json.ok !== true) throw new Error('GET /status failed')
+    if (st.json.embeddings !== 'disabled') throw new Error(`status embeddings should be disabled, got ${st.json.embeddings}`)
+    if (st.json.notes !== 0) throw new Error('fresh DB should report 0 notes')
+
+    // create with collection names (resolve-or-create)
+    const created = await req('POST', '/notes', {
+      title: 'API smoke note',
+      contentMd: 'unix socket payload apifindme',
+      collectionNames: ['API Col']
+    })
+    if (created.status !== 201) throw new Error(`POST /notes returned ${created.status}`)
+    const id: string = created.json.id
+    if (!created.json.collectionNames.includes('API Col')) throw new Error('collectionNames missing on create response')
+
+    // get
+    const got = await req('GET', `/notes/${id}`)
+    if (got.status !== 200 || got.json.title !== 'API smoke note') throw new Error('GET /notes/:id roundtrip failed')
+
+    // append — session snapshot of the PRE-edit state must land first
+    const appended = await req('PATCH', `/notes/${id}`, { mode: 'append', contentMd: 'tail apitail' })
+    if (appended.status !== 200) throw new Error(`PATCH append returned ${appended.status}`)
+    if (appended.json.contentMd !== 'unix socket payload apifindme\n\ntail apitail') {
+      throw new Error('append did not join with a blank line')
+    }
+    const vlist = versions.list(id)
+    if (vlist.length !== 1 || vlist[0]!.kind !== 'session') throw new Error('PATCH did not session-snapshot')
+    if (versions.get(vlist[0]!.id)!.contentMd !== 'unix socket payload apifindme') {
+      throw new Error('snapshot is not the PRE-edit state')
+    }
+
+    // searchable after indexing (flush instead of waiting out the 2 s debounce)
+    indexer.flushNote(id)
+    const found = await req('GET', '/search?q=apitail')
+    if (found.json.usedMode !== 'keyword' || found.json.results[0]?.noteId !== id) {
+      throw new Error('keyword search missed the API note after flush')
+    }
+    const deepFallback = await req('GET', '/search?q=apitail&mode=deep')
+    if (deepFallback.json.usedMode !== 'keyword') throw new Error('deep without embedder must report usedMode keyword')
+    if (deepFallback.json.results[0]?.noteId !== id) throw new Error('deep fallback returned no results')
+
+    // collections endpoints + duplicate 409
+    const cols = await req('GET', '/collections')
+    if (!cols.json.some((c: any) => c.name === 'API Col' && c.noteCount === 1)) {
+      throw new Error('GET /collections missing API Col with count')
+    }
+    const dup = await req('POST', '/collections', { name: 'api col' }) // NOCASE duplicate
+    if (dup.status !== 409) throw new Error(`duplicate collection should 409, got ${dup.status}`)
+    const newCol = await req('POST', '/collections', { name: 'Second Col' })
+    if (newCol.status !== 201) throw new Error('POST /collections failed')
+
+    // membership by NAME (create-on-add, unknown remove is a no-op)
+    const note2 = await req('POST', '/notes', { title: 'Second note', contentMd: 'second body' })
+    const addRes = await req('POST', `/notes/${note2.json.id}/collections`, { add: ['Second Col', 'Third Col'] })
+    if (addRes.status !== 200) throw new Error(`membership add returned ${addRes.status}`)
+    if (!addRes.json.collectionNames.includes('Second Col') || !addRes.json.collectionNames.includes('Third Col')) {
+      throw new Error('membership add by name failed')
+    }
+    const rmRes = await req('POST', `/notes/${note2.json.id}/collections`, { remove: ['Second Col', 'Never Existed'] })
+    if (rmRes.json.collectionNames.length !== 1 || rmRes.json.collectionNames[0] !== 'Third Col') {
+      throw new Error('membership remove by name failed')
+    }
+
+    // related (no vectors → unavailableReason, but the route itself must work)
+    const rel = await req('GET', `/notes/${id}/related?broaden=true`)
+    if (rel.status !== 200 || rel.json.unavailableReason !== 'embeddings-disabled') {
+      throw new Error('related route did not report embeddings-disabled')
+    }
+
+    // trash → instantly gone from search, visible in trash scope, PATCH → 409
+    const del = await req('DELETE', `/notes/${id}`)
+    if (del.status !== 200 || del.json.ok !== true) throw new Error('DELETE /notes/:id failed')
+    const goneSearch = await req('GET', '/search?q=apitail')
+    if (goneSearch.json.results.length !== 0) throw new Error('trashed note still in search results')
+    const trashList = await req('GET', '/notes?scope=trash')
+    if (!trashList.json.items.some((n: any) => n.id === id)) throw new Error('trashed note missing from trash scope')
+    const patchTrashed = await req('PATCH', `/notes/${id}`, { mode: 'replace', contentMd: 'x' })
+    if (patchTrashed.status !== 409 || !patchTrashed.json.error.includes('trash')) {
+      throw new Error('PATCH on a trashed note must 409 with a clear message')
+    }
+
+    // error semantics
+    const miss = await req('GET', '/notes/no-such-id')
+    if (miss.status !== 404 || !miss.json.error) throw new Error('missing note must 404 with { error }')
+    const badSearch = await req('GET', '/search')
+    if (badSearch.status !== 400) throw new Error('search without q must 400')
+    const badScope = await req('GET', '/notes?scope=collection')
+    if (badScope.status !== 400) throw new Error('scope=collection without collectionId must 400')
+
+    console.log('[smoke] M6 API OK — 0600 socket, status, create/get/append by name, session snapshot, search + deep fallback, trash 409/404, collections + membership by name')
+
+    // ── Real Go binary over the same live socket ──
+    let goAvailable = true
+    try {
+      execFileSync('go', ['version'], { stdio: 'ignore' })
+    } catch {
+      goAvailable = false
+    }
+    const cliDir = join(app.getAppPath(), 'cli')
+    if (!goAvailable || !existsSync(cliDir)) {
+      console.log('[smoke] M6 CLI SKIPPED — go not on PATH (or cli/ missing); install Go to exercise the mym binary')
+      return
+    }
+    const bin = join(dir, 'mym')
+    execFileSync('go', ['build', '-o', bin, '.'], { cwd: cliDir, stdio: 'inherit' })
+    // MUST be async: a sync exec would block the event loop and deadlock the
+    // in-process HTTP server the binary is talking to.
+    const mym = async (...args: string[]): Promise<string> => {
+      const { stdout } = await execFileAsync(bin, args, {
+        env: { ...process.env, MYMEM_SOCKET: sock },
+        encoding: 'utf8'
+      })
+      return stdout
+    }
+
+    const statusOut = await mym('status')
+    if (!statusOut.includes('myMem v') || !statusOut.includes('embeddings: disabled')) {
+      throw new Error(`mym status output unexpected: ${statusOut}`)
+    }
+    const cliCreated = JSON.parse(await mym('create', '--title', 'CLI smoke note', '--json', 'cli body climarker'))
+    const cliId: string = cliCreated.id
+    if (typeof cliId !== 'string' || cliId.length !== 36) throw new Error('mym create --json did not return a full id')
+    const getOut = await mym('get', cliId)
+    if (!getOut.includes('CLI smoke note') || !getOut.includes('climarker')) {
+      throw new Error(`mym get output unexpected: ${getOut}`)
+    }
+    indexer.flushNote(cliId)
+    const searchOut = await mym('search', 'climarker')
+    // human listings show the LAST 8 id chars (the UUIDv7 random tail)
+    if (!searchOut.includes('CLI smoke note') || !searchOut.includes(cliId.slice(-8))) {
+      throw new Error(`mym search missed the CLI note: ${searchOut}`)
+    }
+
+    console.log('[smoke] M6 CLI OK — built mym, real binary ran status/create/get/search over the live socket')
+  } finally {
+    const { stopApiServer } = await import('./api/server')
+    stopApiServer()
+    drainIndexer?.()
+    const { closeDb } = await import('./db/connection')
+    closeDb()
+    delete process.env.MYMEM_DB_PATH
+    delete process.env.MYMEM_SOCKET
     rmSync(dir, { recursive: true, force: true })
   }
 }
