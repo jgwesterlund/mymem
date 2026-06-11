@@ -34,12 +34,13 @@ your machine except the model calls you explicitly make.
 
 ```sh
 brew tap jgwesterlund/tap
-brew install --cask mymem --no-quarantine   # the app
-brew install jgwesterlund/tap/mym           # optional: the CLI for agents
+brew install --cask mymem           # the app
+brew install jgwesterlund/tap/mym   # optional: the CLI for agents
 ```
 
-Builds are currently **unsigned**, which is why `--no-quarantine` is suggested —
-without it, right-click the app and choose "Open" on first launch instead.
+Builds are currently **unsigned**, so macOS Gatekeeper blocks the first
+launch: right-click `/Applications/myMem.app` and choose "Open" (once), or run
+`xattr -dr com.apple.quarantine /Applications/myMem.app`.
 
 ### Download
 
