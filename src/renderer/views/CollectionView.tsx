@@ -16,6 +16,10 @@ export default function CollectionView({
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
   const collection = useCollectionsStore((s) => s.items.find((c) => c.id === collectionId))
+  // Reactive pinned state from the pins cache (same contract as NoteView).
+  const pinned = useCollectionsStore((s) =>
+    s.pins.some((p) => p.itemType === 'collection' && p.itemId === collectionId)
+  )
 
   const refresh = useCallback(async (): Promise<void> => {
     const res = await invoke('notes:list', { scope: 'collection', collectionId })
@@ -70,6 +74,19 @@ export default function CollectionView({
         )}
         {!renaming && collection && (
           <span className="hidden items-center gap-1 text-[12px] text-ink-muted group-hover:flex">
+            <button
+              title={pinned ? 'Unpin from sidebar (⌘⇧P)' : 'Pin to sidebar (⌘⇧P)'}
+              onClick={() => {
+                void invoke('pins:set', {
+                  itemType: 'collection',
+                  itemId: collectionId,
+                  pinned: !pinned
+                }).then(() => toast(pinned ? 'Unpinned' : 'Pinned to sidebar'))
+              }}
+              className={`rounded px-1.5 py-0.5 hover:bg-hover ${pinned ? 'text-accent' : ''}`}
+            >
+              {pinned ? 'Unpin' : 'Pin'}
+            </button>
             <button
               onClick={() => {
                 setName(collection.name)

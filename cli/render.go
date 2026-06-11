@@ -54,11 +54,15 @@ func newTable(w io.Writer) *tabwriter.Writer {
 	return tabwriter.NewWriter(w, 2, 4, 2, ' ', 0)
 }
 
-func renderNoteTable(w io.Writer, items []note) {
+func renderNoteTable(w io.Writer, items []note, pinnedIDs map[string]bool) {
 	tw := newTable(w)
 	fmt.Fprintln(tw, "ID\tUPDATED\tTITLE")
 	for _, n := range items {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", shortID(n.ID), formatTime(n.UpdatedAt), titleOr(n.Title))
+		title := titleOr(n.Title)
+		if pinnedIDs[n.ID] {
+			title = "📌 " + title
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", shortID(n.ID), formatTime(n.UpdatedAt), title)
 	}
 	tw.Flush()
 }

@@ -15,7 +15,7 @@ import { emitDataChanged } from '../ipc/registry'
 /** The slice of Services the API needs. embedder is optional so the smoke leg can omit it. */
 export type ApiServices = Pick<
   Services,
-  'notes' | 'collections' | 'search' | 'related' | 'indexer' | 'versionsService'
+  'notes' | 'collections' | 'pins' | 'search' | 'related' | 'indexer' | 'versionsService'
 > & { embedder?: Services['embedder'] }
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024
@@ -165,6 +165,18 @@ export function createApiHandler(s: ApiServices) {
       return send(res, 200, out)
     }
 
+    // ── GET /pins ── pin order, titles/names resolved so agents need no second lookup.
+    if (seg.length === 1 && seg[0] === 'pins' && method === 'GET') {
+      const pins = s.pins.list().map((p) => ({
+        ...p,
+        title:
+          p.itemType === 'note'
+            ? (s.notes.get(p.itemId)?.title ?? '')
+            : (s.collections.get(p.itemId)?.name ?? '')
+      }))
+      return send(res, 200, pins)
+    }
+
     // ── /collections ──
     if (seg.length === 1 && seg[0] === 'collections') {
       if (method === 'GET') return send(res, 200, s.collections.list())
@@ -281,6 +293,25 @@ export function createApiHandler(s: ApiServices) {
           emitDataChanged({ entity: 'note', ids: [id], op: 'trash', origin: 'api' })
         }
         return send(res, 200, { ok: true })
+      }
+
+      // PUT /notes/:id/pin { pinned } — notes only in v1 (collections pin via the UI).
+      // Unlike the IPC path (pins:set emits inside its handler), the API route
+      // emits its own data:changed with origin 'api' — same pattern as every
+      // other route here, and what keeps open windows' pin state live.
+      if (seg.length === 3 && seg[2] === 'pin' && method === 'PUT') {
+        const body = asRecord(await readBody(req))
+        if (typeof body.pinned !== 'boolean') throw new HttpError(400, 'pinned must be a boolean')
+        const note = s.notes.get(id)
+        if (!note) throw new HttpError(404, `note not found: ${id}`)
+        // Trash already cleared any pin, so unpinning a trashed note is an
+        // idempotent no-op; PINNING one is rejected like PATCH on it.
+        if (body.pinned && note.trashedAt !== null) {
+          throw new HttpError(409, `note is in the trash — restore it in the app before pinning: ${id}`)
+        }
+        s.pins.set('note', id, body.pinned)
+        emitDataChanged({ entity: 'pin', ids: [id], op: 'update', origin: 'api' })
+        return send(res, 200, fullNote(id))
       }
 
       // GET /notes/:id/related?broaden=

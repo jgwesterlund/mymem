@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { NoteListItem } from '@shared/types'
 import { invoke } from '../api'
+import { useCollectionsStore } from '../stores/collections'
 import { openContent } from '../stores/tabs'
+import { toast } from '../stores/ui'
 
 function isTextTarget(e: KeyboardEvent): boolean {
   const t = e.target
@@ -29,6 +31,7 @@ export function NoteList({
   focused?: boolean
 }): React.JSX.Element {
   const [sel, setSel] = useState(0)
+  const pins = useCollectionsStore((s) => s.pins)
 
   useEffect(() => {
     setSel((s) => Math.min(s, Math.max(0, items.length - 1)))
@@ -69,35 +72,52 @@ export function NoteList({
 
   return (
     <div className="flex flex-col">
-      {items.map((n, i) => (
-        <div
-          key={n.id}
-          data-testid="note-list-item"
-          onClick={(e) => open(n, e)}
-          onMouseEnter={() => setSel(i)}
-          className={`group cursor-default rounded-lg px-3 py-2 ${i === sel ? 'bg-hover' : ''}`}
-        >
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="truncate text-[14px] font-medium">{n.title || 'Untitled'}</span>
-            <span className="shrink-0 text-[11px] text-ink-muted">
-              {new Date(n.updatedAt).toLocaleDateString()}
-            </span>
+      {items.map((n, i) => {
+        const pinned = pins.some((p) => p.itemType === 'note' && p.itemId === n.id)
+        return (
+          <div
+            key={n.id}
+            data-testid="note-list-item"
+            onClick={(e) => open(n, e)}
+            onMouseEnter={() => setSel(i)}
+            className={`group cursor-default rounded-lg px-3 py-2 ${i === sel ? 'bg-hover' : ''}`}
+          >
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="truncate text-[14px] font-medium">{n.title || 'Untitled'}</span>
+              <span className="shrink-0 text-[11px] text-ink-muted">
+                {new Date(n.updatedAt).toLocaleDateString()}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate text-[12px] text-ink-muted">{n.excerpt || 'Empty note'}</span>
+              <span className="hidden shrink-0 items-center gap-2 group-hover:flex">
+                <button
+                  title={pinned ? 'Unpin from sidebar' : 'Pin to sidebar'}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void invoke('pins:set', { itemType: 'note', itemId: n.id, pinned: !pinned }).then(
+                      () => toast(pinned ? 'Unpinned' : 'Pinned to sidebar')
+                    )
+                  }}
+                  className={`text-[11px] ${pinned ? 'font-medium text-accent' : 'text-ink-muted hover:text-accent'}`}
+                >
+                  {pinned ? 'Unpin' : 'Pin'}
+                </button>
+                <button
+                  title="Move to Trash"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void invoke('notes:trash', { id: n.id })
+                  }}
+                  className="text-[11px] text-ink-muted hover:text-[#b0524a] dark:hover:text-[#c97a72]"
+                >
+                  Trash
+                </button>
+              </span>
+            </div>
           </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="truncate text-[12px] text-ink-muted">{n.excerpt || 'Empty note'}</span>
-            <button
-              title="Move to Trash"
-              onClick={(e) => {
-                e.stopPropagation()
-                void invoke('notes:trash', { id: n.id })
-              }}
-              className="hidden shrink-0 text-[11px] text-ink-muted hover:text-[#b0524a] group-hover:block dark:hover:text-[#c97a72]"
-            >
-              Trash
-            </button>
-          </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

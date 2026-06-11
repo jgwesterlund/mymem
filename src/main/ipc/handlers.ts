@@ -289,6 +289,13 @@ export function registerIpcHandlers(): void {
   // ── Pins / Templates / Versions / Settings ──
   typedHandle('pins:list', () => s.pins.list())
   typedHandle('pins:set', ({ itemType, itemId, pinned }) => {
+    // Same guard as the API route: a trashed note must not be pinnable (the
+    // gone-state view still reports it as active content for Cmd+Shift+P).
+    if (pinned && itemType === 'note') {
+      const note = s.notes.get(itemId)
+      if (!note) throw new Error(`note not found: ${itemId}`)
+      if (note.trashedAt !== null) throw new Error('note is in the trash')
+    }
     const pins = s.pins.set(itemType, itemId, pinned)
     emitDataChanged({ entity: 'pin', ids: [itemId], op: 'update', origin: 'user' })
     return pins

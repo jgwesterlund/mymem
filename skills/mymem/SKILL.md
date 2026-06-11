@@ -49,7 +49,9 @@ mym append 9f3ac2d4 -- "- new checklist item"   # '--' before content that start
 echo "piped addition" | mym append 9f3ac2d4     # stdin works too
 mym update 9f3ac2d4 "replacement body"          # REPLACES the whole note body
 mym collections                                 # list collections with note counts
-mym trash 9f3ac2d4                              # soft delete (recoverable in the app)
+mym pin 9f3ac2d4                                # pin to the app sidebar (📌 marker in `mym list`)
+mym unpin 9f3ac2d4                              # remove from the sidebar's Pinned section
+mym trash 9f3ac2d4                              # soft delete (recoverable in the app, clears any pin)
 mym related 9f3ac2d4 [--broaden]                # semantically related notes
 ```
 

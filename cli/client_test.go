@@ -24,6 +24,7 @@ type fakeStore struct {
 	mu    sync.Mutex
 	notes map[string]*note
 	order []string
+	pins  []string // pinned note ids in pin order
 	seq   int
 }
 
@@ -175,6 +176,55 @@ func newFakeAPI(st *fakeStore) http.Handler {
 		ts := int64(1700000001000)
 		n.TrashedAt = &ts
 		writeJSONStatus(w, 200, map[string]bool{"ok": true})
+	})
+
+	mux.HandleFunc("PUT /notes/{id}/pin", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Pinned *bool `json:"pinned"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Pinned == nil {
+			writeErr(w, 400, "pinned must be a boolean")
+			return
+		}
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		id := r.PathValue("id")
+		n, ok := st.notes[id]
+		if !ok {
+			writeErr(w, 404, "note not found: "+id)
+			return
+		}
+		if n.TrashedAt != nil && *body.Pinned {
+			writeErr(w, 409, "note is in the trash — restore it in the app before pinning: "+id)
+			return
+		}
+		next := st.pins[:0]
+		for _, p := range st.pins {
+			if p != id {
+				next = append(next, p)
+			}
+		}
+		st.pins = next
+		if *body.Pinned {
+			st.pins = append(st.pins, id)
+		}
+		writeJSONStatus(w, 200, n)
+	})
+
+	mux.HandleFunc("GET /pins", func(w http.ResponseWriter, _ *http.Request) {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		pins := []pin{}
+		for i, id := range st.pins {
+			pins = append(pins, pin{
+				ItemType:  "note",
+				ItemID:    id,
+				SortOrder: i + 1,
+				PinnedAt:  1700000000000,
+				Title:     st.notes[id].Title,
+			})
+		}
+		writeJSONStatus(w, 200, pins)
 	})
 
 	mux.HandleFunc("GET /search", func(w http.ResponseWriter, r *http.Request) {
@@ -511,6 +561,63 @@ func TestTrashFlow(t *testing.T) {
 	listOut, _, _ := runCLI("list", "--trash")
 	if !strings.Contains(listOut, shortID(n.ID)) {
 		t.Fatalf("trashed note missing from list --trash:\n%s", listOut)
+	}
+}
+
+func TestPinUnpinFlow(t *testing.T) {
+	t.Setenv("MYMEM_SOCKET", startFake(t))
+	n := mustCreate(t, "--title", "Pin target", "--json", "pinbody")
+	other := mustCreate(t, "--title", "Bystander", "--json", "otherbody")
+
+	out, errOut, code := runCLI("pin", shortID(n.ID)) // short ids resolve here too
+	if code != 0 {
+		t.Fatalf("pin failed (code %d): %s", code, errOut)
+	}
+	if !strings.Contains(out, "pinned "+shortID(n.ID)) || !strings.Contains(out, "Pin target") {
+		t.Fatalf("pin confirmation missing:\n%s", out)
+	}
+
+	// The 📌 marker sits in the TITLE column of the pinned row ONLY.
+	listOut, _, _ := runCLI("list")
+	for _, line := range strings.Split(listOut, "\n") {
+		switch {
+		case strings.Contains(line, shortID(n.ID)) && !strings.Contains(line, "📌 Pin target"):
+			t.Fatalf("pinned row missing the 📌 marker:\n%s", listOut)
+		case strings.Contains(line, shortID(other.ID)) && strings.Contains(line, "📌"):
+			t.Fatalf("unpinned row carries a 📌 marker:\n%s", listOut)
+		}
+	}
+
+	out, errOut, code = runCLI("unpin", n.ID)
+	if code != 0 {
+		t.Fatalf("unpin failed (code %d): %s", code, errOut)
+	}
+	if !strings.Contains(out, "unpinned "+shortID(n.ID)) {
+		t.Fatalf("unpin confirmation missing:\n%s", out)
+	}
+	if listOut, _, _ = runCLI("list"); strings.Contains(listOut, "📌") {
+		t.Fatalf("📌 marker survived unpin:\n%s", listOut)
+	}
+}
+
+func TestPinErrors(t *testing.T) {
+	t.Setenv("MYMEM_SOCKET", startFake(t))
+	mustCreate(t, "--title", "Filler", "--json", "fillerbody")
+
+	// API 404 → exit 1 with the server message.
+	_, errOut, code := runCLI("pin", "0196aaaa-bbbb-7ccc-8ddd-999999999999")
+	if code != 1 {
+		t.Fatalf("pin of a missing note must exit 1, got %d", code)
+	}
+	if !strings.Contains(errOut, "note not found") {
+		t.Fatalf("stderr must carry the server error:\n%s", errOut)
+	}
+
+	// Usage errors → exit 2.
+	for _, args := range [][]string{{"pin"}, {"unpin"}, {"pin", "a", "b"}} {
+		if _, _, code := runCLI(args...); code != 2 {
+			t.Errorf("args %v: want exit 2, got %d", args, code)
+		}
 	}
 }
 

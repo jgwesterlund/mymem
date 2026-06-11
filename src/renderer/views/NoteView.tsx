@@ -4,6 +4,7 @@ import type { Node as PMNode } from '@tiptap/pm/model'
 import type { Note } from '@shared/types'
 import type { MarkdownManager } from '@tiptap/markdown'
 import { invoke, on } from '../api'
+import { useCollectionsStore } from '../stores/collections'
 import { useTabsStore } from '../stores/tabs'
 import { useUiStore, toast } from '../stores/ui'
 import Editor from '../editor/Editor'
@@ -71,6 +72,12 @@ export default function NoteView({
   const cleanupAccepting = useRef(false)
   const historyOpen = useUiStore((s) => s.historyNoteId === noteId)
   const organizeOpen = useUiStore((s) => s.organizeNoteId === noteId)
+  // Pinned state comes REACTIVELY from the pins cache (kept fresh by the
+  // data:changed 'pin' refresh) — note.pinned is a load-time snapshot that
+  // goes stale the moment ⌘⇧P or another surface toggles the pin.
+  const pinned = useCollectionsStore((s) =>
+    s.pins.some((p) => p.itemType === 'note' && p.itemId === noteId)
+  )
 
   const save = useRef<SaveState>({
     base: 0,
@@ -428,6 +435,18 @@ export default function NoteView({
           />
           <div className="flex shrink-0 items-baseline gap-3 text-[11px] text-ink-muted">
             <span>{savedLabel}</span>
+            {/* Same toggle as ⌘⇧P (commands/registry 'toggle-pin'), same toast. */}
+            <button
+              title={pinned ? 'Unpin from sidebar (⌘⇧P)' : 'Pin to sidebar (⌘⇧P)'}
+              onClick={() => {
+                void invoke('pins:set', { itemType: 'note', itemId: noteId, pinned: !pinned }).then(
+                  () => toast(pinned ? 'Unpinned' : 'Pinned to sidebar')
+                )
+              }}
+              className={pinned ? 'text-accent hover:text-ink' : 'hover:text-ink'}
+            >
+              📌 {pinned ? 'Unpin' : 'Pin'}
+            </button>
             {/* Same path as ⌘⇧U: the FOCUSED NoteView flushes, then opens the
                 overlay (the click focused this pane via PaneArea's capture). */}
             <button

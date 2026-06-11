@@ -175,6 +175,14 @@ type searchResponse struct {
 	UsedMode string         `json:"usedMode"`
 }
 
+type pin struct {
+	ItemType  string `json:"itemType"`
+	ItemID    string `json:"itemId"`
+	SortOrder int    `json:"sortOrder"`
+	PinnedAt  int64  `json:"pinnedAt"`
+	Title     string `json:"title"`
+}
+
 type statusResponse struct {
 	OK           bool   `json:"ok"`
 	Version      string `json:"version"`
@@ -260,6 +268,23 @@ func (c *client) notesInScope(scope string) ([]note, error) {
 			return all, nil
 		}
 	}
+}
+
+// pinnedNoteIDs returns the ids of pinned notes for the 📌 list marker.
+// Errors degrade to nil (no markers) — an older app without GET /pins must
+// not break `mym list` outright.
+func (c *client) pinnedNoteIDs() map[string]bool {
+	var pins []pin
+	if err := c.getJSON("/pins", &pins); err != nil {
+		return nil
+	}
+	ids := make(map[string]bool, len(pins))
+	for _, p := range pins {
+		if p.ItemType == "note" {
+			ids[p.ItemID] = true
+		}
+	}
+	return ids
 }
 
 func (c *client) collectionIDByName(name string) (string, error) {

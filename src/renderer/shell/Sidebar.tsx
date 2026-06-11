@@ -4,7 +4,7 @@ import { invoke, on } from '../api'
 import { useCollectionsStore } from '../stores/collections'
 import { useNotesStore } from '../stores/notes'
 import { openContent, useTabsStore, selectActiveContent, type PaneContent } from '../stores/tabs'
-import { useUiStore } from '../stores/ui'
+import { toast, useUiStore } from '../stores/ui'
 import { dispatchCommand } from '../commands/registry'
 
 /** Small badge while the embedding backlog drains (index:progress phase 'embedding'). */
@@ -155,6 +155,13 @@ function PinnedList({
                   target
                 )
               }
+              deleteTitle="Unpin"
+              // No confirm: unpinning is trivially reversible (unlike collection delete).
+              onDelete={() => {
+                void invoke('pins:set', { itemType: p.itemType, itemId: p.itemId, pinned: false }).then(
+                  () => toast('Unpinned')
+                )
+              }}
             />
           </div>
         ))}

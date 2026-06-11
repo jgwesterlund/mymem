@@ -29,6 +29,8 @@ Usage:
   mym append <id> [content|-]
   mym update <id> [content|-]
   mym collections
+  mym pin <id>
+  mym unpin <id>
   mym trash <id>
   mym related <id> [--broaden]
 
@@ -70,6 +72,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = cmdEdit(rest, stdout, "replace")
 	case "collections":
 		err = cmdCollections(rest, stdout)
+	case "pin":
+		err = cmdPin(rest, stdout, true)
+	case "unpin":
+		err = cmdPin(rest, stdout, false)
 	case "trash":
 		err = cmdTrash(rest, stdout)
 	case "related":
@@ -237,7 +243,11 @@ func cmdList(args []string, stdout io.Writer) error {
 		fmt.Fprintln(stdout, "no notes")
 		return nil
 	}
-	renderNoteTable(stdout, list.Items)
+	var pinnedIDs map[string]bool
+	if !*trash { // trashed notes are never pinned (trash clears pins)
+		pinnedIDs = c.pinnedNoteIDs()
+	}
+	renderNoteTable(stdout, list.Items, pinnedIDs)
 	if list.Total > len(list.Items) {
 		fmt.Fprintf(stdout, "(%d of %d — raise --limit to see more, up to the server cap of 500 per request)\n",
 			len(list.Items), list.Total)
@@ -445,6 +455,45 @@ func cmdCollections(args []string, stdout io.Writer) error {
 		return nil
 	}
 	renderCollectionsTable(stdout, cols)
+	return nil
+}
+
+// cmdPin handles both `mym pin` (pinned=true) and `mym unpin` (pinned=false) —
+// the note shows up in (or leaves) the app sidebar's Pinned section.
+func cmdPin(args []string, stdout io.Writer, pinned bool) error {
+	verb := "pin"
+	if !pinned {
+		verb = "unpin"
+	}
+	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
+	jsonOut := fs.Bool("json", false, "raw JSON output")
+	pos, err := parseInterleaved(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return usagef("usage: mym %s <id>", verb)
+	}
+	c, err := newClient()
+	if err != nil {
+		return err
+	}
+	id, err := c.resolveNoteID(pos[0])
+	if err != nil {
+		return err
+	}
+	raw, err := c.do("PUT", "/notes/"+url.PathEscape(id)+"/pin", map[string]any{"pinned": pinned})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return printRaw(stdout, raw)
+	}
+	var n note
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "%sned %s  %s\n", verb, shortID(n.ID), titleOr(n.Title))
 	return nil
 }
 

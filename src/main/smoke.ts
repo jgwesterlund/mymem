@@ -191,7 +191,7 @@ async function smokeApiAndCli(): Promise<void> {
     const { getDb } = await import('./db/connection')
     const { createNotesRepo } = await import('./db/repos/notesRepo')
     const { createCollectionsRepo } = await import('./db/repos/collectionsRepo')
-    const { createVersionsRepo } = await import('./db/repos/miscRepos')
+    const { createPinsRepo, createVersionsRepo } = await import('./db/repos/miscRepos')
     const { createIndexer } = await import('./indexing/indexer')
     const { createSearchService } = await import('./search/searchService')
     const { createRelatedService } = await import('./search/relatedService')
@@ -201,6 +201,7 @@ async function smokeApiAndCli(): Promise<void> {
     const dbi = getDb()
     const notes = createNotesRepo(dbi)
     const collections = createCollectionsRepo(dbi)
+    const pins = createPinsRepo(dbi)
     const versions = createVersionsRepo(dbi)
     const indexer = createIndexer(dbi)
     drainIndexer = () => indexer.flushAll() // pending 2 s debounce timers must not outlive closeDb
@@ -208,7 +209,7 @@ async function smokeApiAndCli(): Promise<void> {
     const related = createRelatedService(dbi)
     const versionsService = createVersionsService(dbi, { notes, versions })
 
-    const started = await startApiServer({ notes, collections, search, related, indexer, versionsService })
+    const started = await startApiServer({ notes, collections, pins, search, related, indexer, versionsService })
     if (!started) throw new Error('api server did not start on the smoke socket')
     if ((statSync(sock).mode & 0o777) !== 0o600) throw new Error('api socket is not chmod 0600')
 
@@ -313,6 +314,23 @@ async function smokeApiAndCli(): Promise<void> {
       throw new Error('related route did not report embeddings-disabled')
     }
 
+    // pins (v1.3): PUT pin → GET /pins resolves the title → 400/404 paths → unpin
+    const pinOn = await req('PUT', `/notes/${id}/pin`, { pinned: true })
+    if (pinOn.status !== 200 || pinOn.json.pinned !== true) throw new Error('PUT pin did not pin the note')
+    const pinsOut = await req('GET', '/pins')
+    if (pinsOut.status !== 200 || pinsOut.json.length !== 1) throw new Error('GET /pins missing the pinned note')
+    if (pinsOut.json[0].itemType !== 'note' || pinsOut.json[0].itemId !== id || pinsOut.json[0].title !== 'API smoke note') {
+      throw new Error('GET /pins did not resolve the note title')
+    }
+    const pinMiss = await req('PUT', '/notes/no-such-id/pin', { pinned: true })
+    if (pinMiss.status !== 404 || !pinMiss.json.error) throw new Error('PUT pin on a missing note must 404')
+    const pinBad = await req('PUT', `/notes/${id}/pin`, { pinned: 'yes' })
+    if (pinBad.status !== 400) throw new Error('PUT pin with a non-boolean must 400')
+    const pinOff = await req('PUT', `/notes/${id}/pin`, { pinned: false })
+    if (pinOff.status !== 200 || pinOff.json.pinned !== false) throw new Error('PUT pin did not unpin')
+    if ((await req('GET', '/pins')).json.length !== 0) throw new Error('unpin left a pin behind')
+    await req('PUT', `/notes/${id}/pin`, { pinned: true }) // the DELETE below must clear it
+
     // trash → instantly gone from search, visible in trash scope, PATCH → 409
     const del = await req('DELETE', `/notes/${id}`)
     if (del.status !== 200 || del.json.ok !== true) throw new Error('DELETE /notes/:id failed')
@@ -324,6 +342,9 @@ async function smokeApiAndCli(): Promise<void> {
     if (patchTrashed.status !== 409 || !patchTrashed.json.error.includes('trash')) {
       throw new Error('PATCH on a trashed note must 409 with a clear message')
     }
+    if ((await req('GET', '/pins')).json.length !== 0) throw new Error('DELETE did not clear the pin')
+    const pinTrashed = await req('PUT', `/notes/${id}/pin`, { pinned: true })
+    if (pinTrashed.status !== 409) throw new Error('pinning a trashed note must 409')
 
     // error semantics
     const miss = await req('GET', '/notes/no-such-id')
@@ -333,7 +354,7 @@ async function smokeApiAndCli(): Promise<void> {
     const badScope = await req('GET', '/notes?scope=collection')
     if (badScope.status !== 400) throw new Error('scope=collection without collectionId must 400')
 
-    console.log('[smoke] M6 API OK — 0600 socket, status, create/get/append by name, session snapshot, search + deep fallback, trash 409/404, collections + membership by name')
+    console.log('[smoke] M6 API OK — 0600 socket, status, create/get/append by name, session snapshot, search + deep fallback, trash 409/404, collections + membership by name, pins PUT/GET + trash clears')
 
     // ── Real Go binary over the same live socket ──
     let goAvailable = true
@@ -377,7 +398,18 @@ async function smokeApiAndCli(): Promise<void> {
       throw new Error(`mym search missed the CLI note: ${searchOut}`)
     }
 
-    console.log('[smoke] M6 CLI OK — built mym, real binary ran status/create/get/search over the live socket')
+    // pin/unpin + the 📌 marker in list (v1.3)
+    const pinOut = await mym('pin', cliId.slice(-8)) // short-id resolution included
+    if (!pinOut.includes('pinned') || !pinOut.includes(cliId.slice(-8))) {
+      throw new Error(`mym pin output unexpected: ${pinOut}`)
+    }
+    if (!(await mym('list')).includes('📌 CLI smoke note')) {
+      throw new Error('mym list missing the 📌 marker on the pinned note')
+    }
+    await mym('unpin', cliId)
+    if ((await mym('list')).includes('📌')) throw new Error('📌 marker survived mym unpin')
+
+    console.log('[smoke] M6 CLI OK — built mym, real binary ran status/create/get/search/pin/unpin over the live socket')
   } finally {
     const { stopApiServer } = await import('./api/server')
     stopApiServer()
@@ -1472,6 +1504,35 @@ async function smokeDataSpine(): Promise<void> {
     if (notes.list({ scope: 'all' }).total !== 0) throw new Error('trash did not hide note')
     notes.restore(note.id)
     if (notes.list({ scope: 'all' }).total !== 1) throw new Error('restore failed')
+
+    // ── v1.3: pins — pin → order → reorder → unpin → trash clears the pin ──
+    const { createPinsRepo } = await import('./db/repos/miscRepos')
+    const pinsRepo = createPinsRepo(dbi)
+    const pinNote = notes.create({ title: 'Pinned smoke note' })
+    pinsRepo.set('note', pinNote.id, true)
+    pinsRepo.set('collection', col.id, true)
+    let pinList = pinsRepo.list()
+    if (pinList.length !== 2) throw new Error('pins.set did not insert two pins')
+    if (pinList[0]!.itemId !== pinNote.id || pinList[1]!.itemId !== col.id) {
+      throw new Error('pins.list is not in pin order')
+    }
+    if (notes.getWithRefs(pinNote.id)!.pinned !== true) throw new Error('getWithRefs missed the pin')
+    pinList = pinsRepo.reorder([
+      { itemType: 'collection', itemId: col.id },
+      { itemType: 'note', itemId: pinNote.id }
+    ])
+    if (pinList[0]!.itemId !== col.id || pinList[1]!.itemId !== pinNote.id) {
+      throw new Error('pins.reorder did not persist the new order')
+    }
+    pinsRepo.set('collection', col.id, false)
+    pinList = pinsRepo.list()
+    if (pinList.length !== 1 || pinList[0]!.itemId !== pinNote.id) {
+      throw new Error('unpin did not remove the collection pin')
+    }
+    notes.trash(pinNote.id)
+    if (pinsRepo.list().length !== 0) throw new Error('trash did not clear the note pin')
+    notes.deleteForever(pinNote.id) // leave no residue for the later list/search counts
+    console.log('[smoke] pins OK — both item types, pin order, reorder, unpin, trash clears pin')
 
     // ── M3: indexer + keyword search (FTS5 needs the Electron-ABI sqlite) ──
     const { createIndexer } = await import('./indexing/indexer')

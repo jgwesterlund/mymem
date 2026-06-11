@@ -95,7 +95,10 @@ export default function Editor({ noteId, initialMd, onDocChanged, onEditorBlur, 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       {editor && <FormatBar editor={editor} />}
-      <EditorContent editor={editor} className="flex-1 [&>div]:h-full" />
+      {/* Height rule MUST target .editor-prose only: the BubbleMenu plugin appends
+          its pill div to this same wrapper — a bare [&>div]:h-full stretched the
+          pill to the full pane height (the giant-white-panel format bar bug). */}
+      <EditorContent editor={editor} className="flex-1 [&>.editor-prose]:h-full" />
       <SuggestionPopup />
     </div>
   )
