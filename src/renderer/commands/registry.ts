@@ -56,7 +56,44 @@ const handlers: Partial<Record<CommandId, () => void>> = {
     // Empty filePaths = "ask": main owns the open dialog (sandboxed renderer has no fs).
     void invoke('notes:import', { filePaths: [] })
   },
-  organize: () => toast('Organize arrives in M8')
+  // Cmd+O — MANUAL collection picker (the modal lives in the active NoteView).
+  organize: () => {
+    const noteId = activeNoteId()
+    if (noteId) useUiStore.getState().openOrganize(noteId)
+    else toast('Open a note to organize')
+  },
+  // Cmd+Shift+O — AI files the note; result toast carries Undo (shared ai:undo registry).
+  'auto-organize': () => {
+    const noteId = activeNoteId()
+    if (!noteId) {
+      toast('Open a note to auto-organize')
+      return
+    }
+    void invoke('ai:autoOrganize', { noteId })
+      .then((res) => {
+        const all = [...res.applied, ...res.created]
+        if (all.length === 0) {
+          toast('No confident matches')
+          return
+        }
+        const names = all.map((c) => c.name).join(', ')
+        useUiStore.getState().showToast(`Filed into ${names}`, {
+          label: 'Undo',
+          onClick: () => {
+            void invoke('ai:undo', { undoToken: res.undoToken })
+              .then(() => toast('Filing undone'))
+              .catch((err: unknown) => toast(err instanceof Error ? err.message : 'Undo failed'))
+          }
+        })
+      })
+      .catch((err: unknown) => toast(err instanceof Error ? err.message : 'Auto-organize failed'))
+  },
+  // Cmd+Shift+U — the mounted NoteView flushes its editor, THEN opens the overlay.
+  'clean-up': () => {
+    const noteId = activeNoteId()
+    if (noteId) useUiStore.getState().requestCleanup()
+    else toast('Open a note to clean up')
+  }
 }
 
 for (let n = 1; n <= 9; n++) {

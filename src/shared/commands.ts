@@ -31,8 +31,8 @@ export const COMMANDS: Record<CommandId, CommandSpec> = {
 
   // ── Note ──
   organize: { label: 'Organize…', accelerator: 'CmdOrCtrl+O', menu: 'note' },
-  'auto-organize': { label: 'Auto-Organize', menu: 'note' },
-  'clean-up': { label: 'Clean Up', menu: 'note' },
+  'auto-organize': { label: 'Auto-Organize', accelerator: 'CmdOrCtrl+Shift+O', menu: 'note' },
+  'clean-up': { label: 'Clean Up', accelerator: 'CmdOrCtrl+Shift+U', menu: 'note' },
   'toggle-pin': { label: 'Pin Note', menu: 'note' },
   'find-in-note': { label: 'Find in Note…', menu: 'note' },
   'view-history': { label: 'Version History…', menu: 'note' },

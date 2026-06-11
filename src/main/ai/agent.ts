@@ -18,6 +18,8 @@ import type { SettingsRepo } from '../db/repos/miscRepos'
 import { buildSystemPrompt, TITLE_SYSTEM_PROMPT } from './prompts'
 import { AGENT_TOOLS, executeTool, toolLabel } from './tools'
 import type { ToolServices, UndoRecord } from './tools'
+import { createUndoRegistry } from './undoRegistry'
+import type { UndoRegistry } from './undoRegistry'
 import type { Rag } from './rag'
 import { AuthRequiredError } from './providers'
 
@@ -39,12 +41,13 @@ export interface AgentDeps {
   resolveModel: (providerId: string, modelId: string) => Model<Api> | null
   emit: (chatId: string, requestId: string, ev: ChatEvent) => void
   streamFn?: StreamFn
+  /** Shared with auto-organize (handlers wires one registry); defaults to a private one. */
+  undoRegistry?: UndoRegistry
 }
 
 const MAX_ITERATIONS = 12
 /** Hard pre-send error above 80% of the context window (deliberate cut: no eliding). */
 const CONTEXT_BUDGET = 0.8
-const MAX_UNDO_RECORDS = 20
 
 /** Markers for injected user-side context messages — the renderer hides these bubbles. */
 export const WORKSPACE_CONTEXT_PREFIX = '<workspace_context'
@@ -75,7 +78,7 @@ function textOf(message: AssistantMessage): string {
 export function createAgent(deps: AgentDeps) {
   const streamFn = deps.streamFn ?? (piStream as StreamFn)
   const active = new Map<string, AbortController>() // chatId → in-flight turn
-  const undoStore = new Map<string, UndoRecord>() // in-memory by design — undo is per-session
+  const undoRegistry = deps.undoRegistry ?? createUndoRegistry(deps.services)
 
   function buildChipsContext(chips: ContextChip[]): string | null {
     const parts: string[] = []
@@ -262,16 +265,7 @@ export function createAgent(deps: AgentDeps) {
           return
         }
 
-        let undoToken: string | undefined
-        if (undo.snapshots.length > 0 || undo.createdNoteIds.length > 0) {
-          undoToken = uuidv7()
-          undoStore.set(undoToken, undo)
-          while (undoStore.size > MAX_UNDO_RECORDS) {
-            const oldest = undoStore.keys().next().value
-            if (oldest === undefined) break
-            undoStore.delete(oldest)
-          }
-        }
+        const undoToken = undoRegistry.register(undo)
         emit({ type: 'turn_end', turnId, messageId: final.messageId, usage, undoToken })
 
         if (isFirstTurn) void generateTitle(chatId, model, chat.providerId, content)
@@ -294,36 +288,18 @@ export function createAgent(deps: AgentDeps) {
       active.get(chatId)?.abort()
     },
 
+    /** True while ANY chat turn streams — the titles queue pauses on this (M8). */
+    isStreaming(): boolean {
+      return active.size > 0
+    },
+
     /**
-     * ai:undo — restore ai_edit snapshots in reverse order, trash created notes.
-     * (add_to_collection memberships are not undone — spec'd scope.)
+     * ai:undo — delegates to the shared registry (restore ai_edit snapshots in
+     * reverse order, trash created notes; add_to_collection memberships from
+     * chat tools are not undone — spec'd scope).
      */
     undo(undoToken: string): void {
-      const rec = undoStore.get(undoToken)
-      if (!rec) throw new Error('Nothing to undo — the undo window has passed.')
-      undoStore.delete(undoToken)
-      const restored: string[] = []
-      for (const { noteId, versionId } of [...rec.snapshots].reverse()) {
-        const v = deps.services.versions.get(versionId)
-        const note = deps.services.notes.get(noteId)
-        if (!v || !note) continue
-        if (note.trashedAt !== null) continue // user trashed it since — do not silently untrash
-        // Snapshot the CURRENT state before clobbering it (mirror versions:restore's
-        // pre_restore): post-turn user edits stay recoverable from version history.
-        deps.services.versions.snapshot(note, 'pre_restore')
-        deps.services.notes.update(noteId, { title: v.title, contentMd: v.contentMd })
-        deps.services.indexer.enqueue(noteId)
-        restored.push(noteId)
-      }
-      const trashed: string[] = []
-      for (const id of rec.createdNoteIds) {
-        const note = deps.services.notes.get(id)
-        if (!note || note.trashedAt !== null) continue
-        deps.services.notes.trash(id)
-        trashed.push(id)
-      }
-      if (restored.length > 0) deps.services.emitDataChanged({ entity: 'note', ids: restored, op: 'update', origin: 'ai' })
-      if (trashed.length > 0) deps.services.emitDataChanged({ entity: 'note', ids: trashed, op: 'trash', origin: 'ai' })
+      undoRegistry.undo(undoToken)
     }
   }
 }

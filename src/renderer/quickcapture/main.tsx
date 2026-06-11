@@ -6,9 +6,12 @@ import '../styles.css'
 function QuickCapture(): React.JSX.Element {
   const ref = useRef<HTMLTextAreaElement>(null)
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const [autoOrganize, setAutoOrganize] = useState(false)
 
   useEffect(() => {
     ref.current?.focus()
+    // The toggle persists across captures (settings key 'capture.autoOrganize').
+    void invoke('settings:get', { key: 'capture.autoOrganize' }).then((v) => setAutoOrganize(v === true))
     return on('capture:focus', () => {
       setStatus('idle')
       if (ref.current) {
@@ -25,7 +28,8 @@ function QuickCapture(): React.JSX.Element {
       return
     }
     setStatus('saving')
-    await invoke('capture:save', { text })
+    // autoOrganize runs fire-and-forget in main — the panel never waits on AI.
+    await invoke('capture:save', { text, autoOrganize })
     setStatus('saved')
     setTimeout(() => void invoke('capture:hide'), 250)
   }
@@ -48,7 +52,17 @@ function QuickCapture(): React.JSX.Element {
         className="flex-1 resize-none bg-transparent text-[15px] leading-relaxed text-white placeholder-white/40 outline-none"
       />
       <div className="flex items-center justify-between pt-1 text-[11px] text-white/40">
-        <span>myMem quick capture</span>
+        <label className="flex cursor-default items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={autoOrganize}
+            onChange={(e) => {
+              setAutoOrganize(e.target.checked)
+              void invoke('settings:set', { key: 'capture.autoOrganize', value: e.target.checked })
+            }}
+          />
+          Auto-organize
+        </label>
         <span>{status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved ✓' : '↩ save · esc dismiss'}</span>
       </div>
     </div>

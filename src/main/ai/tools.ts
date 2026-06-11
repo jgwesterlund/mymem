@@ -6,6 +6,7 @@ import type { CollectionsRepo } from '../db/repos/collectionsRepo'
 import type { VersionsRepo } from '../db/repos/miscRepos'
 import type { Indexer } from '../indexing/indexer'
 import type { SearchService } from '../search/searchService'
+import type { UndoRecord } from './undoRegistry'
 
 /**
  * The 7 chat-agent tools. Execution goes through the SAME repos/services as the
@@ -80,11 +81,9 @@ export interface ToolServices {
   emitDataChanged: (ev: DataChangedEvent) => void
 }
 
-/** Per-turn undo bookkeeping, owned by the agent. */
-export interface UndoRecord {
-  snapshots: { noteId: string; versionId: string }[]
-  createdNoteIds: string[]
-}
+// Per-turn undo bookkeeping now lives with the shared registry (M8: organize
+// records share the same token namespace). Re-exported for existing importers.
+export type { UndoRecord } from './undoRegistry'
 
 export interface ToolOutcome {
   /** Serialized into the toolResult text content. */

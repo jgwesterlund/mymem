@@ -7,7 +7,9 @@ import { invoke, on } from '../api'
 import { useTabsStore } from '../stores/tabs'
 import { useUiStore, toast } from '../stores/ui'
 import Editor from '../editor/Editor'
+import CleanUpOverlay from '../editor/diff/CleanUpOverlay'
 import VersionHistoryModal from './VersionHistoryModal'
+import OrganizeModal from './OrganizeModal'
 
 /** Saved markdown is canonical without trailing newlines. */
 function normalizeMd(md: string): string {
@@ -38,7 +40,14 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
   const [gone, setGone] = useState<'missing' | 'trashed' | null>(null)
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const [epoch, setEpoch] = useState(0)
+  // Base markdown of the open cleanup session (captured ONCE at open, post-flush);
+  // null = overlay closed.
+  const [cleanupBase, setCleanupBase] = useState<string | null>(null)
+  // True while the overlay's accept invoke is in flight — its own data:changed
+  // (origin 'ai') push must not trip the external-change belt below.
+  const cleanupAccepting = useRef(false)
   const historyOpen = useUiStore((s) => s.historyNoteId === noteId)
+  const organizeOpen = useUiStore((s) => s.organizeNoteId === noteId)
 
   const save = useRef<SaveState>({
     base: 0,
@@ -130,6 +139,34 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
     )
   }, [exportRequest, noteId])
 
+  // Clean Up (Cmd+Shift+U) routes here like export: flush the editor FIRST so
+  // the session's base markdown matches the screen (and the post-accept reload
+  // finds a clean editor → silent, no banner).
+  const cleanupRequest = useUiStore((s) => s.cleanupRequest)
+  const lastCleanupReq = useRef(cleanupRequest)
+  useEffect(() => {
+    if (cleanupRequest === lastCleanupReq.current) return
+    lastCleanupReq.current = cleanupRequest
+    if (save.current.disabled) return
+    void flushRef.current().then(() => setCleanupBase(currentMd() ?? save.current.lastMd))
+  }, [cleanupRequest, currentMd])
+
+  // While the overlay covers the editor it must not swallow keystrokes either:
+  // ProseMirror keeps focus under an absolute cover, and autosave would persist
+  // edits the user cannot see (and accept would then hit the staleness guard).
+  useEffect(() => {
+    if (cleanupBase === null) return
+    const editor = save.current.editor
+    if (editor && !editor.isDestroyed) {
+      editor.setEditable(false)
+      editor.commands.blur()
+    }
+    return () => {
+      const e = save.current.editor
+      if (e && !e.isDestroyed) e.setEditable(true)
+    }
+  }, [cleanupBase])
+
   const schedule = useCallback((): void => {
     const s = save.current
     if (s.timer) clearTimeout(s.timer)
@@ -176,11 +213,12 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
     }
   }, [noteId, epoch])
 
-  // A history modal left open must not follow the user to another tab/note.
+  // A history/organize modal left open must not follow the user to another tab/note.
   useEffect(() => {
     return () => {
       const ui = useUiStore.getState()
       if (ui.historyNoteId === noteId) ui.closeHistory()
+      if (ui.organizeNoteId === noteId) ui.closeOrganize()
     }
   }, [noteId])
 
@@ -221,10 +259,18 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
         return
       }
       if (ev.origin === 'user') return
+      // Belt for the cleanup staleness guard: any non-user write landing while
+      // the overlay is open invalidates its diff — close it (the unmount cancels
+      // the session) instead of letting accept fail later. Accept's own push is
+      // exempt (cleanupAccepting), and the reload below still runs.
+      if (cleanupBase !== null && !cleanupAccepting.current) {
+        setCleanupBase(null)
+        toast('Note changed — Clean Up cancelled')
+      }
       if (isDirty()) setBanner('external')
       else setEpoch((e) => e + 1)
     })
-  }, [noteId, isDirty])
+  }, [noteId, isDirty, cleanupBase])
 
   if (gone) {
     return (
@@ -251,7 +297,7 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
     : ''
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       {banner && (
         <div className="flex items-center justify-between border-b border-hairline bg-amber-100 px-4 py-1.5 text-[12px] text-amber-900">
           <span>
@@ -343,6 +389,15 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
           />
         </div>
       </div>
+      {cleanupBase !== null && (
+        <CleanUpOverlay
+          noteId={noteId}
+          baseMd={cleanupBase}
+          acceptingRef={cleanupAccepting}
+          onClose={() => setCleanupBase(null)}
+        />
+      )}
+      {organizeOpen && <OrganizeModal noteId={noteId} onClose={() => useUiStore.getState().closeOrganize()} />}
       {historyOpen && (
         <VersionHistoryModal
           noteId={noteId}

@@ -253,6 +253,28 @@ export function createProviderManager(deps: {
       }
       const first = this.models()[0]
       return first ? { providerId: first.providerId, modelId: first.modelId } : null
+    },
+
+    /**
+     * Cheap model for titles + auto-organize: settings-pinned 'ai.utilityModel',
+     * else the cheapest-looking connected model (id contains mini/haiku/spark),
+     * else the first available choice. Null when no provider is connected.
+     */
+    utilityModel(): { providerId: string; modelId: string } | null {
+      const pinned = settings.get<{ providerId?: string; modelId?: string }>('ai.utilityModel')
+      if (
+        pinned &&
+        typeof pinned.providerId === 'string' &&
+        typeof pinned.modelId === 'string' &&
+        this.resolveModel(pinned.providerId, pinned.modelId) &&
+        isConnected(byId(pinned.providerId))
+      ) {
+        return { providerId: pinned.providerId, modelId: pinned.modelId }
+      }
+      const choices = this.models()
+      const cheap = choices.find((c) => /mini|haiku|spark/i.test(c.modelId))
+      const pick = cheap ?? choices[0]
+      return pick ? { providerId: pick.providerId, modelId: pick.modelId } : null
     }
   }
 }

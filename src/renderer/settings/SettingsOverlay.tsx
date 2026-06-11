@@ -149,6 +149,7 @@ function AiSection(): React.JSX.Element {
   const [status, setStatus] = useState<{ providers: ProviderStatus[]; encryptionAvailable: boolean } | null>(null)
   const [models, setModels] = useState<ModelChoice[]>([])
   const [defaultModel, setDefaultModel] = useState('')
+  const [utilityModel, setUtilityModel] = useState('')
   const [instructions, setInstructions] = useState('')
   const [busyProvider, setBusyProvider] = useState<string | null>(null)
   const [deviceCode, setDeviceCode] = useState<{ provider: string; verificationUrl: string; userCode: string } | null>(null)
@@ -164,6 +165,10 @@ function AiSection(): React.JSX.Element {
     void invoke('settings:get', { key: 'ai.defaultModel' }).then((v) => {
       const m = v as { providerId?: string; modelId?: string } | null
       if (m?.providerId && m.modelId) setDefaultModel(`${m.providerId}|${m.modelId}`)
+    })
+    void invoke('settings:get', { key: 'ai.utilityModel' }).then((v) => {
+      const m = v as { providerId?: string; modelId?: string } | null
+      if (m?.providerId && m.modelId) setUtilityModel(`${m.providerId}|${m.modelId}`)
     })
     void invoke('settings:get', { key: 'ai.chatInstructions' }).then((v) => {
       if (typeof v === 'string') setInstructions(v)
@@ -238,6 +243,30 @@ function AiSection(): React.JSX.Element {
           className="mt-1 w-full rounded-md border border-hairline bg-surface px-2 py-1 text-[12px]"
         >
           <option value="">First available</option>
+          {models.map((m) => (
+            <option key={`${m.providerId}|${m.modelId}`} value={`${m.providerId}|${m.modelId}`}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <p className="text-[12px] font-medium">Utility model</p>
+        <p className="text-[11px] text-ink-muted">Cheap model for note titles and auto-organize.</p>
+        <select
+          value={utilityModel}
+          onChange={(e) => {
+            setUtilityModel(e.target.value)
+            const [providerId, modelId] = e.target.value.split('|')
+            void invoke('settings:set', {
+              key: 'ai.utilityModel',
+              value: providerId && modelId ? { providerId, modelId } : null
+            })
+          }}
+          className="mt-1 w-full rounded-md border border-hairline bg-surface px-2 py-1 text-[12px]"
+        >
+          <option value="">Cheapest available</option>
           {models.map((m) => (
             <option key={`${m.providerId}|${m.modelId}`} value={`${m.providerId}|${m.modelId}`}>
               {m.label}

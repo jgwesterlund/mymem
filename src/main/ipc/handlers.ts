@@ -22,6 +22,10 @@ import { createCredentialsStore } from '../ai/credentials'
 import { createProviderManager } from '../ai/providers'
 import { createRag } from '../ai/rag'
 import { createAgent } from '../ai/agent'
+import { createUndoRegistry } from '../ai/undoRegistry'
+import { createCleanupService } from '../ai/cleanup'
+import { createOrganizeService } from '../ai/organize'
+import { createTitlesService } from '../ai/titles'
 import { typedHandle, emitDataChanged, push } from './registry'
 import { getMainWindow } from '../windows/mainWindow'
 import { hideQuickCapture } from '../windows/quickCapture'
@@ -43,6 +47,10 @@ export interface Services {
   importer: ReturnType<typeof createImportService>
   providers: ReturnType<typeof createProviderManager>
   agent: ReturnType<typeof createAgent>
+  undoRegistry: ReturnType<typeof createUndoRegistry>
+  cleanup: ReturnType<typeof createCleanupService>
+  organize: ReturnType<typeof createOrganizeService>
+  titles: ReturnType<typeof createTitlesService>
 }
 
 let services: Services | null = null
@@ -65,14 +73,46 @@ export function getServices(): Services {
     settings,
     onDeviceCode: (info) => push('oauth:prompt', info)
   })
+  const toolServices = { notes, collections, versions, indexer, search, emitDataChanged }
+  // ONE undo registry: chat turns and auto-organize mint tokens into the same
+  // store, so a single ai:undo channel reverts either.
+  const undoRegistry = createUndoRegistry(toolServices)
   const agent = createAgent({
     chats,
     settings,
-    services: { notes, collections, versions, indexer, search, emitDataChanged },
+    services: toolServices,
     rag: createRag(db, embedder),
     getApiKey: (providerId) => providers.getApiKeyFor(providerId),
     resolveModel: (providerId, modelId) => providers.resolveModel(providerId, modelId),
-    emit: (chatId, requestId, ev) => push('chat:event', { chatId, requestId, ev })
+    emit: (chatId, requestId, ev) => push('chat:event', { chatId, requestId, ev }),
+    undoRegistry
+  })
+  const cleanup = createCleanupService({
+    notes,
+    versions,
+    indexer,
+    emitDataChanged,
+    pushResult: (payload) => push('ai:cleanup:result', payload),
+    getApiKey: (providerId) => providers.getApiKeyFor(providerId),
+    defaultModel: () => providers.defaultModel(),
+    resolveModel: (providerId, modelId) => providers.resolveModel(providerId, modelId)
+  })
+  const organize = createOrganizeService({
+    notes,
+    collections,
+    emitDataChanged,
+    undoRegistry,
+    getApiKey: (providerId) => providers.getApiKeyFor(providerId),
+    utilityModel: () => providers.utilityModel(),
+    resolveModel: (providerId, modelId) => providers.resolveModel(providerId, modelId)
+  })
+  const titles = createTitlesService({
+    notes,
+    emitDataChanged,
+    getApiKey: (providerId) => providers.getApiKeyFor(providerId),
+    utilityModel: () => providers.utilityModel(),
+    resolveModel: (providerId, modelId) => providers.resolveModel(providerId, modelId),
+    isChatStreaming: () => agent.isStreaming()
   })
   services = {
     notes,
@@ -96,7 +136,11 @@ export function getServices(): Services {
       onProgress: (done, total) => push('import:progress', { done, total })
     }),
     providers,
-    agent
+    agent,
+    undoRegistry,
+    cleanup,
+    organize,
+    titles
   }
   return services
 }
@@ -136,6 +180,10 @@ export function registerIpcHandlers(): void {
     if (!res.conflict) {
       s.indexer.enqueue(id)
       emitDataChanged({ entity: 'note', ids: [id], op: 'update', origin: 'user' })
+      // Titles (M8): a user title edit locks the note out of generation forever;
+      // a content edit (re)schedules the 10 s-debounced utility-model titling.
+      if (patch.title !== undefined) s.titles.noteTitleEdited(id)
+      else if (patch.contentMd !== undefined) s.titles.noteContentEdited(id)
     }
     return res
   })
@@ -359,9 +407,17 @@ export function registerIpcHandlers(): void {
   })
   typedHandle('ai:models', () => s.providers.models())
   typedHandle('ai:undo', ({ undoToken }) => {
-    s.agent.undo(undoToken)
+    // One registry behind both chat-turn and auto-organize tokens.
+    s.undoRegistry.undo(undoToken)
     return { ok: true as const }
   })
+
+  // ── Clean Up / Auto-organize (M8) ──
+  typedHandle('ai:cleanup:start', (input) => s.cleanup.start(input))
+  typedHandle('ai:cleanup:refine', (input) => s.cleanup.refine(input))
+  typedHandle('ai:cleanup:accept', (input) => s.cleanup.accept(input))
+  typedHandle('ai:cleanup:cancel', (input) => s.cleanup.cancel(input))
+  typedHandle('ai:autoOrganize', ({ noteId }) => s.organize.run(noteId))
   typedHandle('oauth:login', ({ provider, method }) => s.providers.login(provider, method))
   typedHandle('oauth:cancel', ({ provider }) => {
     s.providers.cancelLogin(provider)
@@ -375,7 +431,7 @@ export function registerIpcHandlers(): void {
   typedHandle('apikey:set', ({ provider, apiKey }) => s.providers.setApiKey(provider, apiKey))
 
   // ── Quick capture ──
-  typedHandle('capture:save', ({ text }) => {
+  typedHandle('capture:save', ({ text, autoOrganize }) => {
     const firstLine = text.split('\n', 1)[0]!.replace(/^#+\s*/, '').trim()
     const note = s.notes.create({
       title: firstLine.length <= 80 ? firstLine : '',
@@ -383,6 +439,15 @@ export function registerIpcHandlers(): void {
     })
     s.indexer.enqueue(note.id)
     emitDataChanged({ entity: 'note', ids: [note.id], op: 'create', origin: 'capture' })
+    // M8: fire-and-forget organize (panel toggle) + titling for long first lines.
+    // registerUndo: false — the token would be discarded here, and registering it
+    // would evict older, still-reachable records from the shared registry.
+    if (autoOrganize) {
+      void s.organize
+        .run(note.id, { registerUndo: false })
+        .catch((err) => console.error('capture auto-organize failed', err))
+    }
+    if (note.title === '') s.titles.noteContentEdited(note.id)
     return { noteId: note.id }
   })
   typedHandle('capture:hide', () => {

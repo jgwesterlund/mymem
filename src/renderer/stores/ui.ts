@@ -4,6 +4,8 @@ import { invoke } from '../api'
 export interface Toast {
   id: number
   message: string
+  /** Optional action button (e.g. Undo after auto-organize) — extends the timeout. */
+  action?: { label: string; onClick: () => void }
 }
 
 export type RightPanelTab = 'chat' | 'headsup'
@@ -22,8 +24,12 @@ interface UiState {
   settingsOpen: boolean
   /** Note whose VersionHistoryModal is open (rendered by that note's NoteView). */
   historyNoteId: string | null
+  /** Note whose OrganizeModal (Cmd+O) is open (rendered by that note's NoteView). */
+  organizeNoteId: string | null
   /** Bumped by the export-note command; the mounted NoteView flushes, then exports. */
   exportRequest: number
+  /** Bumped by the clean-up command; the mounted NoteView flushes, then opens the overlay. */
+  cleanupRequest: number
   toasts: Toast[]
   toggleSidebar: () => void
   setSearchPaletteOpen: (open: boolean) => void
@@ -35,8 +41,11 @@ interface UiState {
   setSettingsOpen: (open: boolean) => void
   openHistory: (noteId: string) => void
   closeHistory: () => void
+  openOrganize: (noteId: string) => void
+  closeOrganize: () => void
   requestExport: () => void
-  showToast: (message: string) => void
+  requestCleanup: () => void
+  showToast: (message: string, action?: Toast['action']) => void
   dismissToast: (id: number) => void
 }
 
@@ -50,7 +59,9 @@ export const useUiStore = create<UiState>((set) => ({
   rightPanelWidth: RIGHT_PANEL_DEFAULT_W,
   settingsOpen: false,
   historyNoteId: null,
+  organizeNoteId: null,
   exportRequest: 0,
+  cleanupRequest: 0,
   toasts: [],
   toggleSidebar() {
     set((s) => ({ sidebarVisible: !s.sidebarVisible }))
@@ -83,15 +94,24 @@ export const useUiStore = create<UiState>((set) => ({
   closeHistory() {
     set({ historyNoteId: null })
   },
+  openOrganize(noteId) {
+    set({ organizeNoteId: noteId })
+  },
+  closeOrganize() {
+    set({ organizeNoteId: null })
+  },
   requestExport() {
     set((s) => ({ exportRequest: s.exportRequest + 1 }))
   },
-  showToast(message) {
+  requestCleanup() {
+    set((s) => ({ cleanupRequest: s.cleanupRequest + 1 }))
+  },
+  showToast(message, action) {
     const id = nextToastId++
-    set((s) => ({ toasts: [...s.toasts, { id, message }] }))
+    set((s) => ({ toasts: [...s.toasts, { id, message, action }] }))
     setTimeout(() => {
       set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
-    }, 3500)
+    }, action ? 8000 : 3500) // actionable toasts linger long enough to click Undo
   },
   dismissToast(id) {
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))

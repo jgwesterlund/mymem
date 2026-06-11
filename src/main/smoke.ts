@@ -42,6 +42,7 @@ export async function runSmoke(): Promise<number> {
     await smokeDataSpine()
     await smokeApiAndCli()
     await smokeChatAgent()
+    await smokeAiFeatures()
 
     // Real end-to-end embeddings (network, ~23 MB model download) — opt-in only.
     if (process.env.MYMEM_SMOKE_EMBED) await smokeRealEmbeddings()
@@ -777,6 +778,404 @@ async function smokeChatAgent(): Promise<void> {
     indexer.flushAll()
     closeDb()
     console.log('[smoke] M7 chat agent OK — scripted turn (search/read/update/create + citations), idx-ordered persistence, ai_edit snapshot + undo with pre_restore, trashed guard, 12-round cap, 80% context pre-check, mid-tool cancel persists synthetic toolResults, title generation')
+  } finally {
+    delete process.env.MYMEM_DB_PATH
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * M8: Clean Up sessions, auto-organize and note titles with SCRIPTED model
+ * functions (zero network) over a real temp DB. Proves: cleanup validation +
+ * retry + refine transcript + cap + accept (pre_cleanup) + hard length cap +
+ * mid-generation cancel; organize thresholds (0.55/0.7) + toolcall validation
+ * retry + shared-registry undo; title queue with re-check and once-per-note.
+ */
+async function smokeAiFeatures(): Promise<void> {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+
+  const dir = mkdtempSync(join(tmpdir(), 'mymem-smoke-m8-'))
+  process.env.MYMEM_DB_PATH = join(dir, 'smoke.db')
+  try {
+    const { getDb, closeDb } = await import('./db/connection')
+    const { createNotesRepo } = await import('./db/repos/notesRepo')
+    const { createCollectionsRepo } = await import('./db/repos/collectionsRepo')
+    const { createVersionsRepo } = await import('./db/repos/miscRepos')
+    const { createIndexer } = await import('./indexing/indexer')
+    const { createSearchService } = await import('./search/searchService')
+    const { createUndoRegistry } = await import('./ai/undoRegistry')
+    const { createCleanupService } = await import('./ai/cleanup')
+    const { createOrganizeService } = await import('./ai/organize')
+    const { createTitlesService } = await import('./ai/titles')
+    const { createAssistantMessageEventStream } = await import('@earendil-works/pi-ai')
+    type Pi = typeof import('@earendil-works/pi-ai')
+    type AssistantMessage = ReturnType<Pi['createAssistantMessageEventStream']>['result'] extends () => Promise<infer M> ? M : never
+    type CleanupPush = import('@shared/ipc').IpcPushMap['ai:cleanup:result']
+
+    const dbi = getDb()
+    const notes = createNotesRepo(dbi)
+    const collections = createCollectionsRepo(dbi)
+    const versions = createVersionsRepo(dbi)
+    const indexer = createIndexer(dbi)
+    const search = createSearchService(dbi)
+    const dataEvents: import('@shared/ipc').DataChangedEvent[] = []
+    const emitDataChanged = (ev: import('@shared/ipc').DataChangedEvent): void => {
+      dataEvents.push(ev)
+    }
+    const undoRegistry = createUndoRegistry({ notes, collections, versions, indexer, search, emitDataChanged })
+
+    const fakeModel = (api: string, contextWindow = 1_000_000) =>
+      ({
+        id: 'fake-utility',
+        name: 'Fake',
+        api,
+        provider: 'fake',
+        baseUrl: 'https://invalid.local',
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow,
+        maxTokens: 4096
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }) as any
+    const usage = {
+      input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+    }
+    const mk = (content: AssistantMessage['content'], stopReason: AssistantMessage['stopReason']): AssistantMessage =>
+      ({
+        role: 'assistant', content, api: 'openai-responses', provider: 'fake', model: 'fake-utility',
+        usage, stopReason, timestamp: Date.now()
+      }) as AssistantMessage
+    const textMsg = (text: string): AssistantMessage => mk([{ type: 'text', text }], 'stop')
+
+    // ── Clean Up ──────────────────────────────────────────────────────────────
+    const pushes: CleanupPush[] = []
+    const mkCleanup = (
+      script: (call: number, context: { messages: { role: string; content: unknown }[] }, options: { signal?: AbortSignal }) => AssistantMessage | 'hold'
+    ) => {
+      let calls = 0
+      const svc = createCleanupService({
+        notes, versions, indexer, emitDataChanged,
+        pushResult: (p) => pushes.push(p),
+        getApiKey: async () => 'fake-key',
+        defaultModel: () => ({ providerId: 'fake', modelId: 'fake-utility' }),
+        resolveModel: () => fakeModel('openai-responses'),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        streamFn: ((_m: unknown, context: any, options: any) => {
+          const s = createAssistantMessageEventStream()
+          const verdict = script(calls++, context, options ?? {})
+          if (verdict === 'hold') {
+            options?.signal?.addEventListener('abort', () => {
+              s.push({ type: 'error', reason: 'aborted', error: mk([], 'aborted') })
+            })
+          } else {
+            queueMicrotask(() => s.push({ type: 'done', reason: 'stop', message: verdict }))
+          }
+          return s
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any
+      })
+      return { svc, calls: () => calls }
+    }
+    const lastPush = (): CleanupPush => pushes[pushes.length - 1]!
+    // since must be captured BEFORE the triggering call: some pushes (too-long
+    // cap) fire synchronously inside start().
+    const awaitPush = async (since: number): Promise<CleanupPush> => {
+      await waitFor(() => pushes.length > since, 5000, 'ai:cleanup:result push')
+      return lastPush()
+    }
+
+    const baseMd = [
+      '# my note', '',
+      'teh quick brown fox jumps over the lazy dog and keeps runing along the road', '',
+      '```js', 'const x = 1', '```', '',
+      '- [x] done item', '- [ ] open itme'
+    ].join('\n')
+    const cleanedMd = baseMd.replace('teh', 'the').replace('runing', 'running').replace('itme', 'item')
+    const refinedMd = cleanedMd.replace('# my note', '## My note')
+    const note = notes.create({ title: 'Cleanup target', contentMd: baseMd })
+
+    // Happy path + refine transcript + cap-at-5 + accept
+    const happy = mkCleanup((_call, context) => {
+      const last = context.messages[context.messages.length - 1]!
+      return typeof last.content === 'string' && last.content.startsWith('Refine:') ? textMsg(refinedMd) : textMsg(cleanedMd)
+    })
+    let since = pushes.length
+    let { sessionId } = happy.svc.start({ noteId: note.id })
+    let result = await awaitPush(since)
+    if (result.sessionId !== sessionId || result.cleanedMd !== cleanedMd) throw new Error('cleanup happy path push wrong')
+
+    since = pushes.length
+    happy.svc.refine({ sessionId, instruction: 'use an h2 heading' })
+    result = await awaitPush(since)
+    if (result.cleanedMd !== refinedMd) throw new Error('refine did not produce the refined markdown')
+    // transcript grew: the refine stream saw user, assistant(prev), user('Refine: …')
+    for (let i = 0; i < 4; i++) {
+      since = pushes.length
+      happy.svc.refine({ sessionId, instruction: `tweak ${i}` })
+      await awaitPush(since)
+    }
+    let capThrew = false
+    try {
+      happy.svc.refine({ sessionId, instruction: 'one too many' })
+    } catch {
+      capThrew = true
+    }
+    if (!capThrew) throw new Error('6th refine must throw (cap 5)')
+    if (happy.calls() !== 6) throw new Error(`expected 6 generations (1 start + 5 refines), got ${happy.calls()}`)
+
+    const accepted = happy.svc.accept({ sessionId })
+    if (typeof accepted.updatedAt !== 'number') throw new Error('accept returned no updatedAt')
+    if (notes.get(note.id)!.contentMd !== refinedMd) throw new Error('accept did not write the refined markdown')
+    const preCleanup = versions.list(note.id).find((v) => v.kind === 'pre_cleanup')
+    if (!preCleanup) throw new Error('accept did not snapshot pre_cleanup')
+    if (versions.get(preCleanup.id)!.contentMd !== baseMd) throw new Error('pre_cleanup snapshot is not the PRE-accept state')
+    if (indexer.pendingCount() !== 1) throw new Error('accept did not enqueue the note for reindexing')
+    if (!dataEvents.some((e) => e.origin === 'ai' && e.op === 'update' && e.ids.includes(note.id))) {
+      throw new Error('accept did not emit data:changed origin ai')
+    }
+    if (happy.svc.sessionCount() !== 0) throw new Error('accept did not free the session')
+
+    // Refine transcript content check via a dedicated script
+    const transcriptSeen: number[] = []
+    const tcheck = mkCleanup((_call, context) => {
+      transcriptSeen.push(context.messages.length)
+      return textMsg(cleanedMd)
+    })
+    since = pushes.length
+    const t1 = tcheck.svc.start({ noteId: note.id })
+    await awaitPush(since)
+    since = pushes.length
+    tcheck.svc.refine({ sessionId: t1.sessionId, instruction: 'tighter lists' })
+    await awaitPush(since)
+    if (transcriptSeen.join(',') !== '1,3') throw new Error(`refine transcript did not grow 1→3: ${transcriptSeen.join(',')}`)
+    tcheck.svc.cancel({ sessionId: t1.sessionId })
+
+    // Validation retry: first response empty → ONE silent retry → ok
+    const retry = mkCleanup((call) => (call === 0 ? textMsg('   ') : textMsg(cleanedMd)))
+    since = pushes.length
+    const r1 = retry.svc.start({ noteId: note.id })
+    result = await awaitPush(since)
+    if (result.cleanedMd !== cleanedMd) throw new Error('validation retry did not recover')
+    if (retry.calls() !== 2) throw new Error(`empty first response should retry once, got ${retry.calls()} calls`)
+    retry.svc.cancel({ sessionId: r1.sessionId })
+
+    // Length-ratio violation twice → error (and code fences must also be preserved)
+    const shrink = mkCleanup(() => textMsg('tiny'))
+    since = pushes.length
+    const r2 = shrink.svc.start({ noteId: note.id })
+    result = await awaitPush(since)
+    if (result.sessionId !== r2.sessionId || !result.error) throw new Error('double ratio violation must push an error')
+    if (shrink.calls() !== 2) throw new Error('ratio violation must retry exactly once before erroring')
+
+    // Too-long note → immediate error, zero model calls
+    const longNote = notes.create({ title: 'Long', contentMd: 'x'.repeat(49_000) })
+    const toolong = mkCleanup(() => textMsg(cleanedMd))
+    since = pushes.length
+    const r3 = toolong.svc.start({ noteId: longNote.id })
+    result = await awaitPush(since)
+    if (result.sessionId !== r3.sessionId || result.error !== 'note too long to clean') {
+      throw new Error(`too-long note pushed ${JSON.stringify(result)}`)
+    }
+    if (toolong.calls() !== 0) throw new Error('too-long note must not call the model')
+    if (toolong.svc.sessionCount() !== 0) throw new Error('too-long start must not leave a session')
+
+    // Cancel mid-generation: AbortController kills the stream, no push, session gone
+    const held = mkCleanup(() => 'hold')
+    const r4 = held.svc.start({ noteId: note.id })
+    const pushesBefore = pushes.length
+    await new Promise((r) => setTimeout(r, 20)) // let generate() reach the stream await
+    held.svc.cancel({ sessionId: r4.sessionId })
+    await new Promise((r) => setTimeout(r, 50))
+    if (pushes.length !== pushesBefore) throw new Error('cancelled generation must not push a result')
+    if (held.svc.sessionCount() !== 0) throw new Error('cancel did not free the session')
+    let cancelledRefineThrew = false
+    try {
+      held.svc.refine({ sessionId: r4.sessionId, instruction: 'x' })
+    } catch {
+      cancelledRefineThrew = true
+    }
+    if (!cancelledRefineThrew) throw new Error('refine on a cancelled session must throw')
+
+    // Staleness guard: a write landing between start and accept (chat agent,
+    // CLI/API patch, leaked keystroke) must veto accept — newer content wins.
+    const staleNote = notes.create({ title: 'Stale target', contentMd: baseMd })
+    const stale = mkCleanup(() => textMsg(cleanedMd))
+    since = pushes.length
+    const r5 = stale.svc.start({ noteId: staleNote.id })
+    await awaitPush(since)
+    await new Promise((r) => setTimeout(r, 5)) // updatedAt is ms-resolution — let it tick past the base
+    const newerMd = baseMd + '\n\nline written mid-session'
+    notes.update(staleNote.id, { contentMd: newerMd })
+    let staleThrew = false
+    try {
+      stale.svc.accept({ sessionId: r5.sessionId })
+    } catch (err) {
+      staleThrew = true
+      if (!(err instanceof Error) || !err.message.includes('changed while cleaning up')) {
+        throw new Error(`stale accept threw the wrong error: ${String(err)}`)
+      }
+    }
+    if (!staleThrew) throw new Error('accept on a stale base must throw')
+    if (notes.get(staleNote.id)!.contentMd !== newerMd) throw new Error('stale accept clobbered the newer content')
+    if (stale.svc.sessionCount() !== 0) throw new Error('stale accept did not free the session')
+    if (versions.list(staleNote.id).some((v) => v.kind === 'pre_cleanup')) {
+      throw new Error('stale accept must not commit a pre_cleanup snapshot')
+    }
+
+    console.log('[smoke] M8 cleanup OK — happy path, refine transcript + cap 5, accept (pre_cleanup + reindex + data:changed ai), empty→retry, ratio error, hard length cap, mid-generation cancel, stale-base accept veto')
+
+    // ── Auto-organize ─────────────────────────────────────────────────────────
+    collections.create({ name: 'Work' })
+    collections.create({ name: 'Recipes' })
+    const orgNote = notes.create({ title: 'Trip planning', contentMd: 'Flights, hotels and a packing list for the autumn trip.' })
+
+    const fileNoteCall = (assignments: unknown[]) =>
+      mk([{ type: 'toolCall', id: 'fn1', name: 'file_note', arguments: { assignments } }], 'toolUse')
+    const mkOrganize = (script: (call: number, options: Record<string, unknown>) => AssistantMessage, api = 'openai-responses') => {
+      let calls = 0
+      const optionsSeen: Record<string, unknown>[] = []
+      const svc = createOrganizeService({
+        notes, collections, emitDataChanged, undoRegistry,
+        getApiKey: async () => 'fake-key',
+        utilityModel: () => ({ providerId: 'fake', modelId: 'fake-utility' }),
+        resolveModel: () => fakeModel(api),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        streamFn: ((_m: unknown, _ctx: unknown, options: any) => {
+          optionsSeen.push(options ?? {})
+          const s = createAssistantMessageEventStream()
+          const msg = script(calls++, options ?? {})
+          queueMicrotask(() => s.push({ type: 'done', reason: msg.stopReason === 'toolUse' ? 'toolUse' : 'stop', message: msg }))
+          return s
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any
+      })
+      return { svc, calls: () => calls, optionsSeen }
+    }
+
+    // Mixed confidences: only ≥0.55 existing applied, only ≥0.7 new created
+    const mixed = mkOrganize(() =>
+      fileNoteCall([
+        { collection: 'Work', confidence: 0.6, isNew: false, reason: 'work trip' },
+        { collection: 'Recipes', confidence: 0.4, isNew: false, reason: 'weak' },
+        { collection: 'Travel Plans', confidence: 0.8, isNew: true, reason: 'clearly travel' },
+        { collection: 'Low New', confidence: 0.6, isNew: true, reason: 'below the 0.7 bar' }
+      ])
+    )
+    const orgRes = await mixed.svc.run(orgNote.id)
+    if (orgRes.applied.length !== 1 || orgRes.applied[0]!.name !== 'Work') throw new Error('organize did not apply exactly Work')
+    if (orgRes.created.length !== 1 || orgRes.created[0]!.name !== 'Travel Plans') throw new Error('organize did not create exactly Travel Plans')
+    if (!orgRes.undoToken) throw new Error('organize with effects must mint an undoToken')
+    if (collections.getByName('Low New')) throw new Error('below-0.7 new collection was created')
+    const orgRefs = notes.getWithRefs(orgNote.id)!
+    if (orgRefs.collectionIds.length !== 2) throw new Error('organize memberships wrong')
+    if (!dataEvents.some((e) => e.entity === 'collection' && e.op === 'create' && e.origin === 'ai')) {
+      throw new Error('organize did not emit collection create origin ai')
+    }
+
+    // Undo via the SHARED registry: memberships removed, created collection deleted
+    undoRegistry.undo(orgRes.undoToken)
+    if (notes.getWithRefs(orgNote.id)!.collectionIds.length !== 0) throw new Error('undo did not remove organize memberships')
+    if (collections.getByName('Travel Plans')) throw new Error('undo did not delete the created collection')
+    if (!collections.getByName('Work')) throw new Error('undo must not delete the pre-existing collection')
+
+    // Invalid first response (text, no toolcall) → ONE retry → valid
+    const flaky = mkOrganize((call) =>
+      call === 0 ? textMsg('I would file this under Work.') : fileNoteCall([{ collection: 'Work', confidence: 0.9, isNew: false, reason: 'retry' }])
+    )
+    const flakyRes = await flaky.svc.run(orgNote.id)
+    if (flaky.calls() !== 2) throw new Error('invalid toolcall response must retry exactly once')
+    if (flakyRes.applied.length !== 1) throw new Error('retry path did not apply the assignment')
+    undoRegistry.undo(flakyRes.undoToken)
+
+    // Below-threshold everything → empty result, no undo token, nothing written
+    const meek = mkOrganize(() =>
+      fileNoteCall([
+        { collection: 'Work', confidence: 0.5, isNew: false, reason: 'meh' },
+        { collection: 'Maybe New', confidence: 0.69, isNew: true, reason: 'meh' }
+      ])
+    )
+    const meekRes = await meek.svc.run(orgNote.id)
+    if (meekRes.applied.length !== 0 || meekRes.created.length !== 0 || meekRes.undoToken !== '') {
+      throw new Error('below-threshold organize must return empty + no token')
+    }
+    if (notes.getWithRefs(orgNote.id)!.collectionIds.length !== 0) throw new Error('below-threshold organize wrote memberships')
+
+    // Capture's fire-and-forget path: registerUndo:false applies normally but
+    // mints no token (and must not evict records from the shared registry).
+    const capNote = notes.create({ title: 'Captured', contentMd: 'Quarterly budget meeting notes and action items.' })
+    const capOrg = mkOrganize(() => fileNoteCall([{ collection: 'Work', confidence: 0.9, isNew: false, reason: 'work' }]))
+    const capRes = await capOrg.svc.run(capNote.id, { registerUndo: false })
+    if (capRes.applied.length !== 1 || capRes.applied[0]!.name !== 'Work') throw new Error('registerUndo:false did not apply')
+    if (capRes.undoToken !== '') throw new Error('registerUndo:false must return an empty undo token')
+
+    // Anthropic models get toolChoice forcing passed through stream options
+    const claude = mkOrganize(() => fileNoteCall([]), 'anthropic-messages')
+    await claude.svc.run(orgNote.id)
+    const tc = claude.optionsSeen[0]?.toolChoice as { type?: string; name?: string } | undefined
+    if (tc?.type !== 'tool' || tc.name !== 'file_note') throw new Error('anthropic api must receive toolChoice {tool, file_note}')
+    const codexOpts = mixed.optionsSeen[0]
+    if (codexOpts && 'toolChoice' in codexOpts) throw new Error('non-anthropic api must NOT receive toolChoice')
+
+    console.log('[smoke] M8 organize OK — thresholds 0.55/0.7, shared-registry undo (memberships + created collection), toolcall validation retry, toolChoice only for anthropic, empty below threshold, registerUndo:false tokenless capture path')
+
+    // ── Titles ────────────────────────────────────────────────────────────────
+    const longBody = 'This paragraph is comfortably longer than eighty characters so the titler will pick it up for processing.'
+    const tA = notes.create({ title: '', contentMd: longBody })
+    let titleReply = ' "Smoke Title." '
+    let midFlight: (() => void) | null = null
+    const titles = createTitlesService({
+      notes, emitDataChanged,
+      getApiKey: async () => 'fake-key',
+      utilityModel: () => ({ providerId: 'fake', modelId: 'fake-utility' }),
+      resolveModel: () => fakeModel('openai-responses'),
+      isChatStreaming: () => false,
+      debounceMs: 10,
+      pausePollMs: 10,
+      completeFn: async () => {
+        midFlight?.()
+        return textMsg(titleReply)
+      }
+    })
+
+    titles.noteContentEdited(tA.id)
+    await waitFor(() => notes.get(tA.id)!.title === 'Smoke Title', 5000, 'AI note title')
+    if (notes.get(tA.id)!.titleSource !== 'ai') throw new Error('AI title must set titleSource ai')
+    if (!dataEvents.some((e) => e.origin === 'ai' && e.ids.includes(tA.id))) throw new Error('title write did not emit data:changed origin ai')
+
+    // Second run for the same note is skipped (once per note + titleSource ai)
+    notes.update(tA.id, { title: '' }) // clear it — titleSource stays 'ai'
+    titles.noteContentEdited(tA.id)
+    await new Promise((r) => setTimeout(r, 80))
+    if (titles.completionCount() !== 1) throw new Error('a titled note must never be re-titled')
+
+    // User types a title while the completion is in flight → NOT overwritten
+    const tB = notes.create({ title: '', contentMd: longBody })
+    titleReply = 'Should Never Land'
+    midFlight = () => notes.update(tB.id, { title: 'User typed', titleSource: 'user' })
+    titles.noteContentEdited(tB.id)
+    await waitFor(() => titles.completionCount() === 2, 5000, 'second title completion')
+    await new Promise((r) => setTimeout(r, 50))
+    const tBNote = notes.get(tB.id)!
+    if (tBNote.title !== 'User typed' || tBNote.titleSource !== 'user') {
+      throw new Error('mid-flight user title was overwritten by the AI title')
+    }
+
+    // A user title edit (handler path) cancels the pending debounce permanently
+    const tC = notes.create({ title: '', contentMd: longBody })
+    titles.noteContentEdited(tC.id)
+    titles.noteTitleEdited(tC.id) // user typed before the 10 s debounce fired
+    await new Promise((r) => setTimeout(r, 80))
+    if (titles.completionCount() !== 2) throw new Error('user title edit must cancel the queued generation')
+
+    titles.dispose()
+    console.log('[smoke] M8 titles OK — empty-title note titled (sanitized, titleSource ai), once-per-note skip, mid-flight user title wins, user edit cancels queue')
+
+    indexer.flushAll()
+    closeDb()
   } finally {
     delete process.env.MYMEM_DB_PATH
     rmSync(dir, { recursive: true, force: true })
