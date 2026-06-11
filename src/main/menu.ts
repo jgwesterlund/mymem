@@ -26,7 +26,28 @@ function items(menu: 'file' | 'edit' | 'view' | 'note' | 'window'): MenuItemCons
 
 export function buildAppMenu(): void {
   const template: MenuItemConstructorOptions[] = [
-    { role: 'appMenu' },
+    {
+      // Custom app menu instead of role 'appMenu': Settings… (Cmd+,) must dispatch
+      // the open-settings command into the renderer overlay.
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        {
+          label: COMMANDS['open-settings'].label,
+          accelerator: COMMANDS['open-settings'].accelerator,
+          click: () => sendCommand('open-settings')
+        },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' }
+      ]
+    },
     { label: 'File', submenu: items('file') },
     {
       label: 'Edit',

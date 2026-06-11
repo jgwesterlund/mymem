@@ -16,7 +16,7 @@ export interface CommandSpec {
 export const COMMANDS: Record<CommandId, CommandSpec> = {
   // ── File ──
   'new-note': { label: 'New Note', accelerator: 'CmdOrCtrl+N', menu: 'file' },
-  'new-chat': { label: 'New Chat', menu: 'file' },
+  'new-chat': { label: 'New Chat', accelerator: 'CmdOrCtrl+J', menu: 'file' },
   'open-search': { label: 'Search Notes…', accelerator: 'CmdOrCtrl+K', menu: 'file' },
   'import-files': { label: 'Import Files…', menu: 'file' },
   'export-note': { label: 'Export as Markdown…', menu: 'file' },
@@ -51,8 +51,9 @@ export const COMMANDS: Record<CommandId, CommandSpec> = {
   'activate-tab-8': { label: 'Tab 8', accelerator: 'CmdOrCtrl+8', menu: 'window' },
   'activate-tab-9': { label: 'Last Tab', accelerator: 'CmdOrCtrl+9', menu: 'window' },
 
-  // ── No menu yet (settings is an in-window overlay, M9) ──
-  'open-settings': { label: 'Settings…', menu: null }
+  // Lives in the app menu (menu.ts places it manually — not one of the four submenus);
+  // opens the in-window overlay, never a separate window (plan cut).
+  'open-settings': { label: 'Settings…', accelerator: 'CmdOrCtrl+,', menu: null }
 }
 
 export const COMMAND_IDS = Object.keys(COMMANDS) as CommandId[]

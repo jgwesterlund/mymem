@@ -1,6 +1,7 @@
 import type { CommandId } from '@shared/ipc'
 import { invoke, on } from '../api'
 import { useTabsStore } from '../stores/tabs'
+import { useChatStore } from '../stores/chat'
 import { useUiStore, toast } from '../stores/ui'
 
 /**
@@ -21,6 +22,12 @@ const handlers: Partial<Record<CommandId, () => void>> = {
       useTabsStore.getState().openInCurrentTab({ kind: 'note', noteId: note.id })
     })
   },
+  'new-chat': () => {
+    // Cmd+J: open the right panel on the Chat tab with a fresh conversation.
+    useUiStore.setState({ rightPanelVisible: true, rightPanelTab: 'chat' })
+    useChatStore.getState().newChat()
+  },
+  'open-settings': () => useUiStore.getState().setSettingsOpen(true),
   'open-search': () =>
     useUiStore.getState().setSearchPaletteOpen(!useUiStore.getState().searchPaletteOpen),
   'toggle-sidebar': () => useUiStore.getState().toggleSidebar(),

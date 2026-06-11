@@ -101,7 +101,14 @@ export type ChatEvent =
   | { type: 'thinking'; turnId: string; delta: string }
   | { type: 'tool_start'; turnId: string; callId: string; name: string; label: string }
   | { type: 'tool_end'; turnId: string; callId: string; ok: boolean; summary: string }
-  | { type: 'turn_end'; turnId: string; messageId: string; usage?: { input: number; output: number; costUsd?: number } }
+  | {
+      type: 'turn_end'
+      turnId: string
+      messageId: string
+      usage?: { input: number; output: number; costUsd?: number }
+      /** Present when the turn mutated notes — feeds the "Chat edited your notes — Undo" toast (ai:undo). */
+      undoToken?: string
+    }
   | {
       type: 'error'
       turnId: string
@@ -125,6 +132,8 @@ export interface ProviderStatus {
   kind: 'oauth' | 'apiKey'
   connected: boolean
   account?: string
+  /** An oauth:login flow is in flight — the Settings overlay derives its busy state from this. */
+  pendingLogin?: boolean
 }
 
 export interface ModelChoice {

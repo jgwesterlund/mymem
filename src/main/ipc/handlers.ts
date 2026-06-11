@@ -1,8 +1,10 @@
 import { writeFileSync } from 'node:fs'
 import { app, dialog } from 'electron'
+import { uuidv7 } from 'uuidv7'
 import { getDb } from '../db/connection'
 import { createNotesRepo } from '../db/repos/notesRepo'
 import { createCollectionsRepo } from '../db/repos/collectionsRepo'
+import { createChatsRepo } from '../db/repos/chatsRepo'
 import {
   createPinsRepo,
   createSettingsRepo,
@@ -16,6 +18,10 @@ import { createSearchService } from '../search/searchService'
 import { createRelatedService } from '../search/relatedService'
 import { createVersionsService } from '../services/versionsService'
 import { createImportService } from '../services/importService'
+import { createCredentialsStore } from '../ai/credentials'
+import { createProviderManager } from '../ai/providers'
+import { createRag } from '../ai/rag'
+import { createAgent } from '../ai/agent'
 import { typedHandle, emitDataChanged, push } from './registry'
 import { getMainWindow } from '../windows/mainWindow'
 import { hideQuickCapture } from '../windows/quickCapture'
@@ -27,6 +33,7 @@ export interface Services {
   templates: ReturnType<typeof createTemplatesRepo>
   versions: ReturnType<typeof createVersionsRepo>
   settings: ReturnType<typeof createSettingsRepo>
+  chats: ReturnType<typeof createChatsRepo>
   indexer: ReturnType<typeof createIndexer>
   embedder: ReturnType<typeof createEmbedderClient>
   embedQueue: ReturnType<typeof createEmbedQueue>
@@ -34,6 +41,8 @@ export interface Services {
   related: ReturnType<typeof createRelatedService>
   versionsService: ReturnType<typeof createVersionsService>
   importer: ReturnType<typeof createImportService>
+  providers: ReturnType<typeof createProviderManager>
+  agent: ReturnType<typeof createAgent>
 }
 
 let services: Services | null = null
@@ -44,20 +53,39 @@ export function getServices(): Services {
   const notes = createNotesRepo(db)
   const collections = createCollectionsRepo(db)
   const versions = createVersionsRepo(db)
+  const settings = createSettingsRepo(db)
+  const chats = createChatsRepo(db)
   const embedder = createEmbedderClient()
   const embedQueue = createEmbedQueue(db, embedder)
   const indexer = createIndexer(db, () => embedQueue.kick())
+  const search = createSearchService(db, embedder)
+  const credentials = createCredentialsStore(settings)
+  const providers = createProviderManager({
+    credentials,
+    settings,
+    onDeviceCode: (info) => push('oauth:prompt', info)
+  })
+  const agent = createAgent({
+    chats,
+    settings,
+    services: { notes, collections, versions, indexer, search, emitDataChanged },
+    rag: createRag(db, embedder),
+    getApiKey: (providerId) => providers.getApiKeyFor(providerId),
+    resolveModel: (providerId, modelId) => providers.resolveModel(providerId, modelId),
+    emit: (chatId, requestId, ev) => push('chat:event', { chatId, requestId, ev })
+  })
   services = {
     notes,
     collections,
     pins: createPinsRepo(db),
     templates: createTemplatesRepo(db),
     versions,
-    settings: createSettingsRepo(db),
+    settings,
+    chats,
     indexer,
     embedder,
     embedQueue,
-    search: createSearchService(db, embedder),
+    search,
     related: createRelatedService(db, embedder),
     versionsService: createVersionsService(db, { notes, versions }),
     importer: createImportService({
@@ -66,7 +94,9 @@ export function getServices(): Services {
       versions,
       indexer,
       onProgress: (done, total) => push('import:progress', { done, total })
-    })
+    }),
+    providers,
+    agent
   }
   return services
 }
@@ -246,7 +276,13 @@ export function registerIpcHandlers(): void {
     emitDataChanged({ entity: 'note', ids: [noteId], op: 'restore', origin: 'user' })
     return s.notes.get(noteId)!
   })
-  typedHandle('settings:get', ({ key }) => s.settings.get(key))
+  typedHandle('settings:get', ({ key }) => {
+    // ai.creds.* rows are safeStorage-encrypted credential blobs. The renderer has
+    // no decrypt path and no business holding ciphertext (it narrows brute-force /
+    // exfiltration targets if the renderer is ever compromised) — serve null.
+    if (key.startsWith('ai.creds.')) return null
+    return s.settings.get(key)
+  })
   typedHandle('settings:set', ({ key, value }) => {
     s.settings.set(key, value)
     push('settings:changed', { key, value })
@@ -268,6 +304,75 @@ export function registerIpcHandlers(): void {
   typedHandle('related:forNote', ({ noteId, broaden }) => s.related.forNote(noteId, broaden ?? false))
   typedHandle('index:rebuild', () => s.indexer.rebuildAll())
   typedHandle('embeddings:status', () => s.embedder.status())
+
+  // ── Chat / AI (M7) ──
+  typedHandle('chat:send', ({ chatId, content, contextChips, model }) => {
+    let chat = chatId ? s.chats.get(chatId) : null
+    // Validate BEFORE creating the chat row or locking the model: a throw here
+    // must not orphan a 'New chat' row, and a bogus renderer-supplied pair must
+    // not lock in and brick the chat.
+    let choice: { providerId: string; modelId: string } | null = null
+    if (!chat?.providerId || !chat.modelId) {
+      // Model locks at first send: explicit pick > settings default > first available.
+      choice = model ?? s.providers.defaultModel()
+      if (!choice) throw new Error('No AI provider connected — connect one in Settings → AI.')
+      const connected = s.providers.status().providers.find((p) => p.id === choice!.providerId)?.connected
+      if (!connected || !s.providers.resolveModel(choice.providerId, choice.modelId)) {
+        throw new Error(`Model ${choice.providerId}/${choice.modelId} is not available — pick another model.`)
+      }
+    }
+    if (!chat) chat = s.chats.create()
+    if (choice) s.chats.setModel(chat.id, choice.providerId, choice.modelId)
+    const requestId = uuidv7()
+    // Fire and return — the turn streams back via chat:event pushes.
+    void s.agent.runTurn({ chatId: chat.id, requestId, content, chips: contextChips })
+    return { chatId: chat.id, requestId }
+  })
+  typedHandle('chat:cancel', ({ chatId }) => {
+    s.agent.cancel(chatId)
+    return { ok: true as const }
+  })
+  typedHandle('chats:list', () => s.chats.list())
+  typedHandle('chats:get', ({ chatId }) => {
+    const chat = s.chats.get(chatId)
+    if (!chat) throw new Error(`chat not found: ${chatId}`)
+    return { chat, messages: s.chats.messages(chatId) }
+  })
+  typedHandle('chats:delete', ({ chatId }) => {
+    s.chats.delete(chatId)
+    return { ok: true as const }
+  })
+  typedHandle('chat:saveAsNote', ({ chatId, messageId }) => {
+    const chat = s.chats.get(chatId)
+    if (!chat) throw new Error(`chat not found: ${chatId}`)
+    const row = s.chats.messages(chatId).find((m) => m.id === messageId)
+    if (!row || row.role !== 'assistant') throw new Error(`assistant message not found: ${messageId}`)
+    const content = (row.content as { content?: { type: string; text?: string }[] }).content ?? []
+    const text = content.filter((c) => c.type === 'text' && c.text).map((c) => c.text).join('\n\n')
+    if (!text.trim()) throw new Error('that message has no text to save')
+    const note = s.notes.create({ title: chat.title === 'New chat' ? '' : chat.title, contentMd: text, titleSource: 'ai' })
+    s.indexer.enqueue(note.id)
+    // origin 'user': saving is an explicit user action (and must not trigger the
+    // "Note updated by chat — Reload" treatment AI writes get).
+    emitDataChanged({ entity: 'note', ids: [note.id], op: 'create', origin: 'user' })
+    return note
+  })
+  typedHandle('ai:models', () => s.providers.models())
+  typedHandle('ai:undo', ({ undoToken }) => {
+    s.agent.undo(undoToken)
+    return { ok: true as const }
+  })
+  typedHandle('oauth:login', ({ provider, method }) => s.providers.login(provider, method))
+  typedHandle('oauth:cancel', ({ provider }) => {
+    s.providers.cancelLogin(provider)
+    return { ok: true as const }
+  })
+  typedHandle('oauth:logout', ({ provider }) => {
+    s.providers.logout(provider)
+    return { ok: true as const }
+  })
+  typedHandle('oauth:status', () => s.providers.status())
+  typedHandle('apikey:set', ({ provider, apiKey }) => s.providers.setApiKey(provider, apiKey))
 
   // ── Quick capture ──
   typedHandle('capture:save', ({ text }) => {

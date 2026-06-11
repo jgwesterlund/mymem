@@ -18,6 +18,8 @@ interface UiState {
   rightPanelVisible: boolean
   rightPanelTab: RightPanelTab
   rightPanelWidth: number
+  /** Settings overlay (Cmd+,) — a modal in the main window, NOT a separate window (plan cut). */
+  settingsOpen: boolean
   /** Note whose VersionHistoryModal is open (rendered by that note's NoteView). */
   historyNoteId: string | null
   /** Bumped by the export-note command; the mounted NoteView flushes, then exports. */
@@ -30,6 +32,7 @@ interface UiState {
   toggleHeadsUp: () => void
   setRightPanelTab: (tab: RightPanelTab) => void
   setRightPanelWidth: (width: number) => void
+  setSettingsOpen: (open: boolean) => void
   openHistory: (noteId: string) => void
   closeHistory: () => void
   requestExport: () => void
@@ -45,6 +48,7 @@ export const useUiStore = create<UiState>((set) => ({
   rightPanelVisible: false,
   rightPanelTab: 'headsup',
   rightPanelWidth: RIGHT_PANEL_DEFAULT_W,
+  settingsOpen: false,
   historyNoteId: null,
   exportRequest: 0,
   toasts: [],
@@ -69,6 +73,9 @@ export const useUiStore = create<UiState>((set) => ({
   },
   setSearchPaletteOpen(open) {
     set({ searchPaletteOpen: open })
+  },
+  setSettingsOpen(open) {
+    set({ settingsOpen: open })
   },
   openHistory(noteId) {
     set({ historyNoteId: noteId })

@@ -1,9 +1,10 @@
 import { useUiStore, type RightPanelTab } from '../stores/ui'
 import { HeadsUpPanel } from './HeadsUpPanel'
+import { ChatPanel } from '../chat/ChatPanel'
 
 /**
- * Resizable right panel (Cmd+\): 'Chat' (M7 placeholder) and 'Heads Up' (the M5
- * tab, Cmd+Shift+K). Width/visibility/tab persist via the ui store settings blob.
+ * Resizable right panel (Cmd+\): 'Chat' (M7) and 'Heads Up' (the M5 tab,
+ * Cmd+Shift+K). Width/visibility/tab persist via the ui store settings blob.
  */
 function TabButton({ tab, label }: { tab: RightPanelTab; label: string }): React.JSX.Element {
   const active = useUiStore((s) => s.rightPanelTab === tab)
@@ -16,19 +17,6 @@ function TabButton({ tab, label }: { tab: RightPanelTab; label: string }): React
     >
       {label}
     </button>
-  )
-}
-
-function ChatPlaceholder(): React.JSX.Element {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-      <div className="rounded-lg border border-hairline bg-surface-dim px-4 py-3">
-        <p className="text-[13px] font-medium">Chat arrives in M7</p>
-        <p className="mt-1 text-[12px] text-ink-muted">
-          Connect an AI provider in Settings to chat with your notes once it lands.
-        </p>
-      </div>
-    </div>
   )
 }
 
@@ -64,7 +52,7 @@ export function RightPanel(): React.JSX.Element | null {
         <TabButton tab="chat" label="Chat" />
         <TabButton tab="headsup" label="Heads Up" />
       </div>
-      {tab === 'chat' ? <ChatPlaceholder /> : <HeadsUpPanel />}
+      {tab === 'chat' ? <ChatPanel /> : <HeadsUpPanel />}
     </aside>
   )
 }

@@ -4,6 +4,7 @@ import { initTabsPersistence } from './stores/tabs'
 import { useNotesStore } from './stores/notes'
 import { useCollectionsStore } from './stores/collections'
 import { useUiStore, initUiPersistence } from './stores/ui'
+import { initChatEvents } from './stores/chat'
 import { initCommandRegistry } from './commands/registry'
 import { TitlebarRegion } from './shell/TabStrip'
 import { Sidebar } from './shell/Sidebar'
@@ -11,6 +12,7 @@ import { PaneArea } from './shell/PaneArea'
 import { RightPanel } from './shell/RightPanel'
 import { SearchPalette } from './shell/SearchPalette'
 import { ImportProgressToast } from './shell/ImportProgressToast'
+import { SettingsOverlay } from './settings/SettingsOverlay'
 
 
 function Toasts(): React.JSX.Element {
@@ -37,6 +39,7 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     const offCommands = initCommandRegistry()
+    initChatEvents() // chat:event stream must be captured even with the panel closed
     // The one data:changed subscription that keeps the renderer caches fresh.
     const offData = on('data:changed', (ev) => {
       if (ev.entity === 'note') {
@@ -109,6 +112,7 @@ export default function App(): React.JSX.Element {
         <RightPanel />
       </div>
       <SearchPalette />
+      <SettingsOverlay />
       <ImportProgressToast />
       <Toasts />
     </div>

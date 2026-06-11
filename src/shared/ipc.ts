@@ -200,8 +200,11 @@ export interface IpcInvokeMap {
   'ai:undo': { args: [{ undoToken: string }]; result: { ok: true } }
   'ai:models': { args: []; result: ModelChoice[] }
   'oauth:login': { args: [{ provider: string; method?: 'browser' | 'device_code' }]; result: { ok: boolean; error?: string } }
+  'oauth:cancel': { args: [{ provider: string }]; result: { ok: true } }
   'oauth:logout': { args: [{ provider: string }]; result: { ok: true } }
-  'oauth:status': { args: []; result: { providers: ProviderStatus[] } }
+  // encryptionAvailable=false → safeStorage has no keychain access: AI features are
+  // disabled entirely (no plaintext credential fallback — deliberate).
+  'oauth:status': { args: []; result: { providers: ProviderStatus[]; encryptionAvailable: boolean } }
   'apikey:set': { args: [{ provider: string; apiKey: string }]; result: { ok: boolean; error?: string } }
 
   // ── Quick capture ──────────────────────────────────────────────────────────
@@ -245,7 +248,7 @@ export const INVOKE_CHANNELS = [
   'chat:send', 'chat:cancel', 'chats:list', 'chats:get', 'chats:delete', 'chat:saveAsNote',
   'ai:cleanup:start', 'ai:cleanup:refine', 'ai:cleanup:accept', 'ai:cleanup:cancel',
   'ai:autoOrganize', 'ai:undo', 'ai:models',
-  'oauth:login', 'oauth:logout', 'oauth:status', 'apikey:set',
+  'oauth:login', 'oauth:cancel', 'oauth:logout', 'oauth:status', 'apikey:set',
   'capture:save', 'capture:hide'
 ] as const satisfies readonly InvokeChannel[]
 

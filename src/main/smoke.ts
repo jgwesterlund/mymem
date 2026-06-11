@@ -41,6 +41,7 @@ export async function runSmoke(): Promise<number> {
 
     await smokeDataSpine()
     await smokeApiAndCli()
+    await smokeChatAgent()
 
     // Real end-to-end embeddings (network, ~23 MB model download) — opt-in only.
     if (process.env.MYMEM_SMOKE_EMBED) await smokeRealEmbeddings()
@@ -384,6 +385,400 @@ async function smokeApiAndCli(): Promise<void> {
     closeDb()
     delete process.env.MYMEM_DB_PATH
     delete process.env.MYMEM_SOCKET
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * M7: the chat agent with a SCRIPTED stream (zero network) over a real temp DB.
+ * Proves: tool execution through the real services (ai_edit snapshot, indexer,
+ * data:changed origin 'ai'), message persistence with idx ordering, citations,
+ * per-turn undo, the trashed guard, the 12-iteration cap, the 80% context
+ * pre-check, and the safeStorage credential roundtrip.
+ */
+async function smokeChatAgent(): Promise<void> {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+
+  const dir = mkdtempSync(join(tmpdir(), 'mymem-smoke-ai-'))
+  process.env.MYMEM_DB_PATH = join(dir, 'smoke.db')
+  try {
+    const { getDb, closeDb } = await import('./db/connection')
+    const { createNotesRepo } = await import('./db/repos/notesRepo')
+    const { createCollectionsRepo } = await import('./db/repos/collectionsRepo')
+    const { createSettingsRepo, createVersionsRepo } = await import('./db/repos/miscRepos')
+    const { createChatsRepo } = await import('./db/repos/chatsRepo')
+    const { createIndexer } = await import('./indexing/indexer')
+    const { createSearchService } = await import('./search/searchService')
+    const { createRag } = await import('./ai/rag')
+    const { createAgent } = await import('./ai/agent')
+    const { createCredentialsStore } = await import('./ai/credentials')
+    const { createProviderManager } = await import('./ai/providers')
+    const { createAssistantMessageEventStream } = await import('@earendil-works/pi-ai')
+    type Pi = typeof import('@earendil-works/pi-ai')
+    type AssistantMessage = ReturnType<Pi['createAssistantMessageEventStream']>['result'] extends () => Promise<infer M> ? M : never
+    type ChatEventT = import('@shared/types').ChatEvent
+
+    const dbi = getDb()
+    const notes = createNotesRepo(dbi)
+    const collections = createCollectionsRepo(dbi)
+    const versions = createVersionsRepo(dbi)
+    const settings = createSettingsRepo(dbi)
+    const chats = createChatsRepo(dbi)
+    const indexer = createIndexer(dbi)
+    const search = createSearchService(dbi)
+    const rag = createRag(dbi)
+
+    const dataEvents: import('@shared/ipc').DataChangedEvent[] = []
+    const services = {
+      notes,
+      collections,
+      versions,
+      indexer,
+      search,
+      emitDataChanged: (ev: import('@shared/ipc').DataChangedEvent) => dataEvents.push(ev)
+    }
+
+    const fakeModel = (contextWindow: number) =>
+      ({
+        id: 'fake-model',
+        name: 'Fake',
+        api: 'openai-responses',
+        provider: 'fake',
+        baseUrl: 'https://invalid.local',
+        reasoning: false,
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow,
+        maxTokens: 4096
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }) as any
+
+    const usage = {
+      input: 5, output: 7, cacheRead: 0, cacheWrite: 0, totalTokens: 12,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 }
+    }
+    const mkAssistant = (content: AssistantMessage['content'], stopReason: 'stop' | 'toolUse'): AssistantMessage =>
+      ({
+        role: 'assistant', content, api: 'openai-responses', provider: 'fake', model: 'fake-model',
+        usage, stopReason, timestamp: Date.now()
+      }) as AssistantMessage
+
+    // ── Scenario A: search → read → update (append) → create, then a cited answer ──
+    const seed = notes.create({ title: 'Flux research', contentMd: 'original flux body' })
+    indexer.flushNote(seed.id)
+    const TITLE_MARKER = 'name chat conversations'
+
+    let aCalls = 0
+    const scriptedA = (_model: unknown, context: { systemPrompt?: string; messages: { role: string; toolName?: string; content: unknown }[] }) => {
+      aCalls++
+      const s = createAssistantMessageEventStream()
+      queueMicrotask(() => {
+        if (context.systemPrompt?.includes(TITLE_MARKER)) {
+          s.push({ type: 'done', reason: 'stop', message: mkAssistant([{ type: 'text', text: 'Flux housekeeping' }], 'stop') })
+          return
+        }
+        const toolResults = context.messages.filter((m) => m.role === 'toolResult')
+        if (toolResults.length === 0) {
+          s.push({
+            type: 'done', reason: 'toolUse',
+            message: mkAssistant(
+              [
+                { type: 'toolCall', id: 'c1', name: 'search_notes', arguments: { query: 'flux', mode: 'keyword' } },
+                { type: 'toolCall', id: 'c2', name: 'read_note', arguments: { id: seed.id } },
+                { type: 'toolCall', id: 'c3', name: 'update_note', arguments: { id: seed.id, mode: 'append', contentMd: 'AI appended line' } },
+                { type: 'toolCall', id: 'c4', name: 'create_note', arguments: { title: 'AI created', contentMd: 'created by the agent' } }
+              ],
+              'toolUse'
+            )
+          })
+          return
+        }
+        // Final iteration: cite the seeded note + the id the create_note toolResult returned.
+        const createRes = toolResults.find((m) => m.toolName === 'create_note') as { content: { text: string }[] } | undefined
+        const createdId = createRes ? (JSON.parse(createRes.content[0]!.text) as { id: string }).id : 'MISSING'
+        const text = `Done — appended to [Flux research](mymem://note/${seed.id}) and created [AI created](mymem://note/${createdId}).`
+        s.push({ type: 'text_delta', contentIndex: 0, delta: text.slice(0, 10), partial: mkAssistant([], 'stop') })
+        s.push({ type: 'text_delta', contentIndex: 0, delta: text.slice(10), partial: mkAssistant([], 'stop') })
+        s.push({ type: 'done', reason: 'stop', message: mkAssistant([{ type: 'text', text }], 'stop') })
+      })
+      return s
+    }
+
+    const eventsA: ChatEventT[] = []
+    const agentA = createAgent({
+      chats, settings, services, rag,
+      getApiKey: async () => 'fake-key',
+      resolveModel: () => fakeModel(16000),
+      emit: (_chatId, _requestId, ev) => eventsA.push(ev),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      streamFn: scriptedA as any
+    })
+
+    const chatA = chats.create()
+    chats.setModel(chatA.id, 'fake', 'fake-model')
+    await agentA.runTurn({ chatId: chatA.id, requestId: 'r1', content: 'Append to my flux note', chips: [] })
+
+    if (eventsA.some((e) => e.type === 'error')) {
+      throw new Error(`scenario A emitted an error: ${JSON.stringify(eventsA.find((e) => e.type === 'error'))}`)
+    }
+    if (eventsA[0]?.type !== 'turn_start') throw new Error('missing turn_start')
+    const toolStarts = eventsA.filter((e) => e.type === 'tool_start')
+    const toolEnds = eventsA.filter((e) => e.type === 'tool_end')
+    if (toolStarts.length !== 4 || toolEnds.length !== 4) throw new Error(`expected 4 tool start/end pairs, got ${toolStarts.length}/${toolEnds.length}`)
+    if (!toolEnds.every((e) => e.type === 'tool_end' && e.ok)) throw new Error('a tool reported failure in scenario A')
+    if (!eventsA.some((e) => e.type === 'text_delta')) throw new Error('no text_delta relayed')
+    const turnEnd = eventsA.find((e) => e.type === 'turn_end')
+    if (turnEnd?.type !== 'turn_end') throw new Error('missing turn_end')
+    if (!turnEnd.undoToken) throw new Error('turn_end carries no undoToken despite mutations')
+    if (turnEnd.usage?.input !== 10 || turnEnd.usage.output !== 14) throw new Error('turn_end usage not accumulated across iterations')
+
+    // Tool effects went through the REAL services
+    if (notes.get(seed.id)!.contentMd !== 'original flux body\n\nAI appended line') throw new Error('update_note append did not land')
+    const aiEdit = versions.list(seed.id).find((v) => v.kind === 'ai_edit')
+    if (!aiEdit) throw new Error('update_note did not snapshot kind ai_edit')
+    if (versions.get(aiEdit.id)!.contentMd !== 'original flux body') throw new Error('ai_edit snapshot is not the PRE-edit state')
+    const created = notes.list({ scope: 'all' }).items.find((n) => n.title === 'AI created')
+    if (!created) throw new Error('create_note did not create the note')
+    if (created.titleSource !== 'ai') throw new Error('AI-created note must have title_source ai')
+    if (!dataEvents.some((e) => e.origin === 'ai' && e.op === 'update' && e.ids.includes(seed.id))) throw new Error('no data:changed origin ai for the update')
+    if (!dataEvents.some((e) => e.origin === 'ai' && e.op === 'create' && e.ids.includes(created.id))) throw new Error('no data:changed origin ai for the create')
+
+    // Persistence: idx-ordered pi-ai messages (user, assistant(tools), 4 toolResults, assistant)
+    const msgs = chats.messages(chatA.id)
+    if (msgs.map((m) => m.idx).join(',') !== '0,1,2,3,4,5,6') throw new Error(`message idx not contiguous: ${msgs.map((m) => m.idx).join(',')}`)
+    if (msgs.map((m) => m.role).join(',') !== 'user,assistant,toolResult,toolResult,toolResult,toolResult,assistant') {
+      throw new Error(`unexpected role sequence: ${msgs.map((m) => m.role).join(',')}`)
+    }
+    const finalText = (msgs[6]!.content as { content: { type: string; text?: string }[] }).content[0]!.text!
+    if (!finalText.includes(`mymem://note/${seed.id}`) || !finalText.includes(`mymem://note/${created.id}`)) {
+      throw new Error('final answer is missing mymem:// citations')
+    }
+    // <5 live notes → turn-1 RAG must have been skipped
+    if (msgs.some((m) => m.role === 'user' && typeof (m.content as { content?: unknown }).content === 'string' && ((m.content as { content: string }).content).startsWith('<workspace_context'))) {
+      throw new Error('RAG injected below the 5-note floor')
+    }
+
+    // Title generation (async, same scripted model) — fires after turn_end
+    await waitFor(() => chats.get(chatA.id)!.title === 'Flux housekeeping', 5000, 'generated chat title')
+
+    // Undo: snapshot restored, created note trashed. A post-turn user edit is
+    // clobbered by the restore — it must survive as a pre_restore version.
+    notes.update(seed.id, { contentMd: 'user edit after the turn' })
+    agentA.undo(turnEnd.undoToken)
+    if (notes.get(seed.id)!.contentMd !== 'original flux body') throw new Error('undo did not restore the updated note')
+    if (notes.get(created.id)!.trashedAt === null) throw new Error('undo did not trash the created note')
+    const preRestore = versions.list(seed.id).find((v) => v.kind === 'pre_restore')
+    if (!preRestore) throw new Error('undo did not snapshot the clobbered state as pre_restore')
+    if (versions.get(preRestore.id)!.contentMd !== 'user edit after the turn') {
+      throw new Error('pre_restore snapshot is not the pre-undo state')
+    }
+    let unknownTokenThrew = false
+    try {
+      agentA.undo(turnEnd.undoToken) // consumed → must throw
+    } catch {
+      unknownTokenThrew = true
+    }
+    if (!unknownTokenThrew) throw new Error('ai:undo accepted a consumed token')
+
+    // ── Scenario B: trashed guard — update_note on the now-trashed note is an isError toolResult ──
+    let bPhase = 0
+    const scriptedB = (_m: unknown, context: { systemPrompt?: string }) => {
+      const s = createAssistantMessageEventStream()
+      queueMicrotask(() => {
+        if (context.systemPrompt?.includes(TITLE_MARKER)) {
+          s.push({ type: 'done', reason: 'stop', message: mkAssistant([{ type: 'text', text: 'Trash test' }], 'stop') })
+          return
+        }
+        if (bPhase++ === 0) {
+          s.push({
+            type: 'done', reason: 'toolUse',
+            message: mkAssistant([{ type: 'toolCall', id: 'b1', name: 'update_note', arguments: { id: created.id, mode: 'append', contentMd: 'x' } }], 'toolUse')
+          })
+        } else {
+          s.push({ type: 'done', reason: 'stop', message: mkAssistant([{ type: 'text', text: 'That note is trashed.' }], 'stop') })
+        }
+      })
+      return s
+    }
+    const eventsB: ChatEventT[] = []
+    const agentB = createAgent({
+      chats, settings, services, rag,
+      getApiKey: async () => 'fake-key',
+      resolveModel: () => fakeModel(16000),
+      emit: (_c, _r, ev) => eventsB.push(ev),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      streamFn: scriptedB as any
+    })
+    const chatB = chats.create()
+    chats.setModel(chatB.id, 'fake', 'fake-model')
+    await agentB.runTurn({ chatId: chatB.id, requestId: 'r2', content: 'Edit the trashed note', chips: [] })
+    const bToolEnd = eventsB.find((e) => e.type === 'tool_end')
+    if (bToolEnd?.type !== 'tool_end' || bToolEnd.ok) throw new Error('trashed update_note must produce an isError tool_end (not a throw)')
+    if (notes.get(created.id)!.contentMd.includes('x')) throw new Error('trashed note was written despite the guard')
+    const bTurnEnd = eventsB.find((e) => e.type === 'turn_end')
+    if (bTurnEnd?.type !== 'turn_end') throw new Error('trashed-guard turn did not finish')
+    if (bTurnEnd.undoToken) throw new Error('failed mutation must not mint an undoToken')
+
+    // ── Scenario C: infinite toolcall stream stops at the 12-iteration cap ──
+    const scriptedC = (_m: unknown, _ctx: unknown) => {
+      const s = createAssistantMessageEventStream()
+      queueMicrotask(() => {
+        s.push({
+          type: 'done', reason: 'toolUse',
+          message: mkAssistant([{ type: 'toolCall', id: `loop-${Math.random()}`, name: 'list_collections', arguments: {} }], 'toolUse')
+        })
+      })
+      return s
+    }
+    const eventsC: ChatEventT[] = []
+    const agentC = createAgent({
+      chats, settings, services, rag,
+      getApiKey: async () => 'fake-key',
+      resolveModel: () => fakeModel(1_000_000),
+      emit: (_c, _r, ev) => eventsC.push(ev),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      streamFn: scriptedC as any
+    })
+    const chatC = chats.create()
+    chats.setModel(chatC.id, 'fake', 'fake-model')
+    await agentC.runTurn({ chatId: chatC.id, requestId: 'r3', content: 'loop forever', chips: [] })
+    const cErr = eventsC.find((e) => e.type === 'error')
+    if (cErr?.type !== 'error' || cErr.code !== 'unknown' || !cErr.message.includes('12')) {
+      throw new Error(`iteration cap did not produce the expected error: ${JSON.stringify(cErr)}`)
+    }
+    if (eventsC.filter((e) => e.type === 'tool_start').length !== 12) throw new Error('iteration cap ran the wrong number of tool rounds')
+
+    // ── Scenario D: hard 80% context pre-check fires BEFORE any model call ──
+    let dCalls = 0
+    const eventsD: ChatEventT[] = []
+    const agentD = createAgent({
+      chats, settings, services, rag,
+      getApiKey: async () => 'fake-key',
+      resolveModel: () => fakeModel(300), // ~240-token budget; the system prompt alone exceeds it
+      emit: (_c, _r, ev) => eventsD.push(ev),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      streamFn: ((..._args: unknown[]) => {
+        dCalls++
+        return scriptedC(null, null)
+      }) as any
+    })
+    const chatD = chats.create()
+    chats.setModel(chatD.id, 'fake', 'fake-model')
+    await agentD.runTurn({ chatId: chatD.id, requestId: 'r4', content: 'x'.repeat(2000), chips: [] })
+    const dErr = eventsD.find((e) => e.type === 'error')
+    if (dErr?.type !== 'error' || dErr.code !== 'context_too_long') throw new Error('context pre-check did not fire')
+    if (dCalls !== 0) throw new Error('context pre-check must reject BEFORE calling the model')
+
+    // ── Scenario E: cancel mid-tool-loop — unexecuted calls get synthetic toolResults ──
+    const scriptedE = (_m: unknown, context: { systemPrompt?: string; messages: { role: string }[] }) => {
+      const s = createAssistantMessageEventStream()
+      queueMicrotask(() => {
+        if (context.systemPrompt?.includes(TITLE_MARKER)) {
+          s.push({ type: 'done', reason: 'stop', message: mkAssistant([{ type: 'text', text: 'Cancel test' }], 'stop') })
+          return
+        }
+        if (context.messages.filter((m) => m.role === 'toolResult').length === 0) {
+          s.push({
+            type: 'done', reason: 'toolUse',
+            message: mkAssistant(
+              [
+                { type: 'toolCall', id: 'e1', name: 'list_collections', arguments: {} },
+                { type: 'toolCall', id: 'e2', name: 'get_recent_notes', arguments: {} }
+              ],
+              'toolUse'
+            )
+          })
+        } else {
+          s.push({ type: 'done', reason: 'stop', message: mkAssistant([{ type: 'text', text: 'Picked up after the cancel.' }], 'stop') })
+        }
+      })
+      return s
+    }
+    const eventsE: ChatEventT[] = []
+    const chatE = chats.create()
+    chats.setModel(chatE.id, 'fake', 'fake-model')
+    const agentE = createAgent({
+      chats, settings, services, rag,
+      getApiKey: async () => 'fake-key',
+      resolveModel: () => fakeModel(64000),
+      emit: (_c, _r, ev) => {
+        eventsE.push(ev)
+        // Abort the moment the FIRST tool finishes: the second call must not run,
+        // but it must still get a synthetic toolResult (no dangling toolCall).
+        if (ev.type === 'tool_end' && ev.callId === 'e1') agentE.cancel(chatE.id)
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      streamFn: scriptedE as any
+    })
+    await agentE.runTurn({ chatId: chatE.id, requestId: 'r5', content: 'cancel me mid-tools', chips: [] })
+    const eErr = eventsE.find((e) => e.type === 'error')
+    if (eErr?.type !== 'error' || eErr.code !== 'cancelled') throw new Error('cancelled turn did not emit the cancelled error')
+    if (eventsE.filter((e) => e.type === 'tool_start').length !== 1) throw new Error('the second tool ran despite the cancel')
+    const eMsgs = chats.messages(chatE.id)
+    if (eMsgs.map((m) => m.role).join(',') !== 'user,assistant,toolResult,toolResult') {
+      throw new Error(`cancelled turn persisted wrong roles: ${eMsgs.map((m) => m.role).join(',')}`)
+    }
+    type SmokeToolResult = { toolCallId: string; isError?: boolean; content: { text: string }[] }
+    const eResults = eMsgs.filter((m) => m.role === 'toolResult').map((m) => m.content as SmokeToolResult)
+    const eReal = eResults.find((t) => t.toolCallId === 'e1')
+    const eSynthetic = eResults.find((t) => t.toolCallId === 'e2')
+    if (!eReal || eReal.isError) throw new Error('executed tool call lost its real toolResult')
+    if (!eSynthetic || eSynthetic.isError !== true || eSynthetic.content[0]!.text !== 'cancelled by user') {
+      throw new Error('unexecuted tool call did not get the synthetic cancelled toolResult')
+    }
+
+    // Follow-up turn on the SAME chat must replay cleanly — a dangling toolCall
+    // would 400 every later send.
+    const eBefore = eventsE.length
+    await agentE.runTurn({ chatId: chatE.id, requestId: 'r6', content: 'and continue', chips: [] })
+    const eAfter = eventsE.slice(eBefore)
+    if (eAfter.some((e) => e.type === 'error')) {
+      throw new Error(`follow-up after cancel errored: ${JSON.stringify(eAfter.find((e) => e.type === 'error'))}`)
+    }
+    if (!eAfter.some((e) => e.type === 'turn_end')) throw new Error('follow-up after cancel did not finish')
+    const eAll = chats.messages(chatE.id)
+    const eCallIds = eAll
+      .filter((m) => m.role === 'assistant')
+      .flatMap((m) =>
+        ((m.content as { content: { type: string; id?: string }[] }).content)
+          .filter((c) => c.type === 'toolCall')
+          .map((c) => c.id!)
+      )
+    const eResultIds = new Set(
+      eAll.filter((m) => m.role === 'toolResult').map((m) => (m.content as { toolCallId: string }).toolCallId)
+    )
+    if (eCallIds.some((id) => !eResultIds.has(id))) throw new Error('dangling toolCall without toolResult after cancel')
+
+    // ── Credentials: safeStorage roundtrip (or the disabled path when unavailable) ──
+    const creds = createCredentialsStore(settings)
+    const providers = createProviderManager({ credentials: creds, settings, onDeviceCode: () => {} })
+    if (creds.available()) {
+      creds.set('openai-codex', { access: 'acc-token', refresh: 'ref-token', expires: 42 })
+      const raw = JSON.stringify(settings.get('ai.creds.openai-codex'))
+      if (raw.includes('acc-token') || raw.includes('ref-token')) throw new Error('credentials stored in PLAINTEXT')
+      const back = creds.get<{ access: string; refresh: string; expires: number }>('openai-codex')
+      if (back?.access !== 'acc-token' || back.refresh !== 'ref-token' || back.expires !== 42) throw new Error('credential decrypt roundtrip failed')
+      const st = providers.status()
+      if (!st.encryptionAvailable) throw new Error('status must report encryption available')
+      if (!st.providers.find((p) => p.id === 'openai-codex')?.connected) throw new Error('status missed the stored credentials')
+      creds.delete('openai-codex')
+      if (creds.get('openai-codex') !== null) throw new Error('credential delete failed')
+      console.log('[smoke] M7 credentials OK — encrypted blob, decrypt roundtrip, delete')
+    } else {
+      const st = providers.status()
+      if (st.encryptionAvailable || st.providers.some((p) => p.connected)) {
+        throw new Error('without safeStorage the AI layer must report disabled/disconnected')
+      }
+      console.log('[smoke] M7 credentials: safeStorage unavailable here — disabled path verified instead')
+    }
+
+    indexer.flushAll()
+    closeDb()
+    console.log('[smoke] M7 chat agent OK — scripted turn (search/read/update/create + citations), idx-ordered persistence, ai_edit snapshot + undo with pre_restore, trashed guard, 12-round cap, 80% context pre-check, mid-tool cancel persists synthetic toolResults, title generation')
+  } finally {
+    delete process.env.MYMEM_DB_PATH
     rmSync(dir, { recursive: true, force: true })
   }
 }
