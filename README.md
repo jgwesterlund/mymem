@@ -30,7 +30,23 @@ your machine except the model calls you explicitly make.
 
 ## Install
 
-Build from source (no prebuilt binaries yet):
+### Homebrew (recommended)
+
+```sh
+brew tap jgwesterlund/tap
+brew install --cask mymem --no-quarantine   # the app
+brew install jgwesterlund/tap/mym           # optional: the CLI for agents
+```
+
+Builds are currently **unsigned**, which is why `--no-quarantine` is suggested —
+without it, right-click the app and choose "Open" on first launch instead.
+
+### Download
+
+Grab the `.dmg` from the [latest release](https://github.com/jgwesterlund/mymem/releases)
+and drag myMem to Applications (same Gatekeeper note applies).
+
+### Build from source
 
 ```sh
 npm install
@@ -38,9 +54,8 @@ npm run dist     # packaged .app/.dmg/.zip in release/ (arm64)
 ```
 
 Requirements: macOS (Apple Silicon / arm64), Node >= 22.19. Go is only needed
-if you want the `mym` CLI. Builds are currently **unsigned** — macOS will warn
-on first launch; see the comments in `electron-builder.yml` for enabling
-signing/notarization with your own Developer ID.
+if you want the `mym` CLI. See the comments in `electron-builder.yml` for
+enabling signing/notarization with your own Developer ID.
 
 ## Develop
 
@@ -69,8 +84,8 @@ notes. An agent skill (`skills/mymem/SKILL.md`) teaches agents the workflow:
 search first, cite note titles, write markdown.
 
 ```sh
-npm run build:cli      # builds cli/mym (requires Go)
-npm run install-skill  # installs the skill for every agent detected on your machine
+brew install jgwesterlund/tap/mym   # or: npm run build:cli (requires Go)
+npm run install-skill                # installs the skill for every agent detected on your machine
 ```
 
 `install-skill` symlinks `skills/mymem` into each agent's skill directory
