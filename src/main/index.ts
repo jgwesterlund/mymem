@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { app, globalShortcut, nativeTheme } from 'electron'
 import { createMainWindow, getMainWindow } from './windows/mainWindow'
 import { toggleQuickCapture } from './windows/quickCapture'
+import { initTray } from './tray'
 import { registerIpcHandlers, getServices } from './ipc/handlers'
 import { push } from './ipc/registry'
 import { buildAppMenu } from './menu'
@@ -75,7 +76,19 @@ if (process.env.MYMEM_SMOKE) {
       // First-run welcome notes (M9) — before the window so the first paint has them.
       runOnboarding(getServices())
 
-      openMainWindow()
+      // Menu bar icon (v1.2): default ON — only an explicit false disables.
+      // Settings → General toggles it live (settings:set in handlers.ts).
+      initTray({
+        openMainWindow,
+        enabled: getServices().settings.get('ui.menuBarIcon') !== false
+      })
+
+      // Launched at login (v1.2): start in the background — tray + ⌃⌘Space quick
+      // capture only, no main window stealing focus at boot. window-all-closed
+      // keeps the app alive either way; the tray/Dock reopens the window.
+      if (!app.getLoginItemSettings().wasOpenedAtLogin) {
+        openMainWindow()
+      }
 
       // Local agent API (M6): unix socket in userData, same services as the UI.
       // A failed start must never take the app down — log and continue.

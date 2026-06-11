@@ -215,7 +215,7 @@ export default function CleanUpOverlay({
         )}
         {phase === 'error' && (
           <div className="flex h-full flex-col items-center justify-center gap-3">
-            <p className="max-w-md text-center text-[13px] text-red-700 dark:text-red-400">{error}</p>
+            <p className="max-w-md text-center text-[13px] text-[#b0524a] dark:text-[#c97a72]">{error}</p>
             <div className="flex gap-2">
               <button
                 onClick={() => setAttempt((a) => a + 1)}

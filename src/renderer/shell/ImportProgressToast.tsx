@@ -26,7 +26,7 @@ export function ImportProgressToast(): React.JSX.Element | null {
   if (!progress) return null
   const finished = progress.done >= progress.total
   return (
-    <div className="pointer-events-none fixed bottom-6 right-6 z-50 rounded-lg border border-hairline bg-surface px-4 py-2 text-[13px] shadow-lg">
+    <div className="pointer-events-none fixed bottom-6 right-6 z-50 rounded-lg border border-hairline bg-surface px-4 py-2 text-[13px] shadow-md">
       {finished
         ? `Import finished — ${progress.total} file${progress.total === 1 ? '' : 's'} processed`
         : `Importing ${progress.done} of ${progress.total}…`}

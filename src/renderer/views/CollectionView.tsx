@@ -81,7 +81,7 @@ export default function CollectionView({
             </button>
             <button
               onClick={deleteCollection}
-              className="rounded px-1.5 py-0.5 hover:bg-hover hover:text-red-600 dark:hover:text-red-400"
+              className="rounded px-1.5 py-0.5 hover:bg-hover hover:text-[#b0524a] dark:hover:text-[#c97a72]"
             >
               Delete
             </button>

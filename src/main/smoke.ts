@@ -952,6 +952,28 @@ async function smokeChatAgent(): Promise<void> {
       creds.delete('openai-codex')
       if (creds.get('openai-codex') !== null) throw new Error('credential delete failed')
       console.log('[smoke] M7 credentials OK — encrypted blob, decrypt roundtrip, delete')
+
+      // ── v1.2 OpenRouter: fake-connect with a dummy key (no network) ──
+      const orKey = 'sk-or-v1-smoke-dummy-key-0000'
+      const orSet = providers.setApiKey('openrouter', orKey)
+      if (!orSet.ok) throw new Error(`setApiKey rejected an sk-or- key: ${orSet.error}`)
+      if (!providers.status().providers.find((p) => p.id === 'openrouter')?.connected) {
+        throw new Error('openrouter not connected after key store')
+      }
+      const orModels = providers.models().filter((m) => m.providerId === 'openrouter')
+      if (orModels.length < 100) throw new Error(`ai:models has only ${orModels.length} openrouter entries`)
+      if (orModels.some((m) => /-\d{8}$/.test(m.modelId))) throw new Error('date-pinned openrouter alias leaked into the picker')
+      if (!orModels[0]!.label.startsWith('OpenRouter · ')) throw new Error(`openrouter label prefix wrong: ${orModels[0]!.label}`)
+      if (await providers.getApiKeyFor('openrouter') !== orKey) throw new Error('getApiKeyFor(openrouter) did not return the stored key')
+      // Cheap-model heuristic over the 250+-model list must not crash — vendor/model
+      // ids like anthropic/claude-3.5-haiku matching /mini|haiku|spark/i is desired.
+      const orUtility = providers.utilityModel()
+      if (!orUtility) throw new Error('utilityModel returned null with openrouter connected')
+      providers.logout('openrouter')
+      if (providers.status().providers.find((p) => p.id === 'openrouter')?.connected) {
+        throw new Error('openrouter still connected after logout')
+      }
+      console.log(`[smoke] v1.2 openrouter OK — key roundtrip, ${orModels.length} models in the picker, utility pick ${orUtility.providerId}/${orUtility.modelId}, remove key`)
     } else {
       const st = providers.status()
       if (st.encryptionAvailable || st.providers.some((p) => p.connected)) {

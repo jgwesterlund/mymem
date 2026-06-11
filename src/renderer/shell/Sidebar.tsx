@@ -65,7 +65,7 @@ function NavItem({
             e.stopPropagation()
             onDelete()
           }}
-          className="hidden shrink-0 rounded px-1 text-[12px] leading-none text-ink-muted hover:text-red-600 group-hover:block dark:hover:text-red-400"
+          className="hidden shrink-0 rounded px-1 text-[12px] leading-none text-ink-muted hover:text-[#b0524a] group-hover:block dark:hover:text-[#c97a72]"
         >
           ✕
         </button>

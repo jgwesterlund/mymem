@@ -5,6 +5,12 @@ directories:
   output: release
 files:
   - out/**
+# buildResources is build-time only (icon.icns etc.) — it is NOT packaged. The
+# menu bar template images must ship inside the app, so they are copied to
+# <app>/Contents/Resources/tray (= process.resourcesPath/tray at runtime).
+extraResources:
+  - from: resources/tray
+    to: tray
 asarUnpack:
   - "**/node_modules/better-sqlite3/**"
   # sqlite-vec ships its loadable vec0.dylib in platform packages (sqlite-vec-darwin-arm64

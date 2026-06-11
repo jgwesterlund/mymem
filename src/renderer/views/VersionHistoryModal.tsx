@@ -15,12 +15,14 @@ const KIND_LABEL: Record<VersionKind, string> = {
   ai_edit: 'ai edit'
 }
 
+// Fjord palette (v1.2): muted Nordic tones — gray-violet (cleanup), sand
+// (restore), muted green (import), fjord blue (ai) — semantics kept, saturation dropped.
 const KIND_CLASS: Record<VersionKind, string> = {
   session: 'bg-hover text-ink-muted',
-  pre_cleanup: 'bg-purple-500/10 text-purple-700 dark:text-purple-300',
-  pre_restore: 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
-  import: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-  ai_edit: 'bg-blue-500/10 text-blue-700 dark:text-blue-300'
+  pre_cleanup: 'bg-[#7d7a8c]/10 text-[#6d6a7d] dark:text-[#a8a5b8]',
+  pre_restore: 'bg-[#a98e5f]/10 text-[#8a7349] dark:text-[#c4ab7d]',
+  import: 'bg-[#6f8472]/10 text-[#5e7361] dark:text-[#9cb09f]',
+  ai_edit: 'bg-[#5b7c99]/10 text-[#4a6e8f] dark:text-[#7d9cb8]'
 }
 
 function escapeHtml(s: string): string {
@@ -118,7 +120,7 @@ export default function VersionHistoryModal({
   return (
     <div className="fixed inset-0 z-50 bg-black/20" onMouseDown={onClose}>
       <div
-        className="mx-auto mt-[8vh] flex h-[76vh] w-[52rem] max-w-[92vw] overflow-hidden rounded-xl border border-hairline bg-surface shadow-2xl"
+        className="mx-auto mt-[8vh] flex h-[76vh] w-[52rem] max-w-[92vw] overflow-hidden rounded-xl border border-hairline bg-surface shadow-lg"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex w-60 shrink-0 flex-col border-r border-hairline">

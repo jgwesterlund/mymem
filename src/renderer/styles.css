@@ -5,16 +5,16 @@
 @theme {
   /* Surface tokens — vibrant surfaces stay transparent so NSVisualEffectView shows through;
      opaque surfaces (editor, right panel) paint over it for text readability. */
-  --color-surface: #ffffff;
-  --color-surface-dim: #f6f6f4;
-  --color-ink: #1c1c1a;
-  --color-ink-muted: #6f6f6a;
-  --color-accent: #d96c47;
-  --color-hairline: rgba(0, 0, 0, 0.08);
+  --color-surface: #fcfcfc;
+  --color-surface-dim: #f7f8f8;
+  --color-ink: #23282c;
+  --color-ink-muted: #707a80;
+  --color-accent: #5b7c99;
+  --color-hairline: rgba(35, 40, 44, 0.08);
   /* Interaction washes — ALWAYS use these instead of bg-black/5-style literals:
      a black wash disappears (or worse, darkens text rows) on dark surfaces. */
-  --color-hover: rgba(0, 0, 0, 0.05);
-  --color-active: rgba(0, 0, 0, 0.1);
+  --color-hover: rgba(35, 40, 44, 0.04);
+  --color-active: rgba(35, 40, 44, 0.08);
 }
 
 /* Dark theme (M9): .dark on <html> is driven by main's theme:changed push
@@ -23,14 +23,14 @@
    custom properties at runtime, so overriding them here re-skins every
    token-based utility (bg-surface, text-ink, border-hairline, bg-hover, …). */
 .dark {
-  --color-surface: #262624;
-  --color-surface-dim: #1d1d1b;
-  --color-ink: #ebebe6;
-  --color-ink-muted: #a3a39b;
-  --color-accent: #e08660; /* slightly lifted for contrast on dark surfaces */
-  --color-hairline: rgba(255, 255, 255, 0.12);
-  --color-hover: rgba(255, 255, 255, 0.07);
-  --color-active: rgba(255, 255, 255, 0.14);
+  --color-surface: #24282b;
+  --color-surface-dim: #1f2326; /* deep blue-charcoal, not black */
+  --color-ink: #e6e9eb;
+  --color-ink-muted: #9aa4ab;
+  --color-accent: #7d9cb8; /* slightly lifted for contrast on dark surfaces */
+  --color-hairline: rgba(255, 255, 255, 0.1);
+  --color-hover: rgba(255, 255, 255, 0.06);
+  --color-active: rgba(255, 255, 255, 0.12);
 }
 
 html,
@@ -77,13 +77,13 @@ body {
 
 .editor-prose h1 {
   font-size: 1.6em;
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.01em;
   margin-top: 1em;
 }
 .editor-prose h2 {
   font-size: 1.3em;
-  font-weight: 650;
+  font-weight: 600;
   margin-top: 1em;
 }
 .editor-prose h3 {
@@ -232,24 +232,24 @@ body {
 
 /* Version history word diff (VersionHistoryModal injects escaped <ins>/<del>) */
 .version-diff ins {
-  background: rgba(37, 99, 235, 0.12);
-  color: #1d4ed8;
+  background: rgba(91, 124, 153, 0.12);
+  color: #4a6e8f;
   text-decoration: none;
   border-radius: 3px;
 }
 .version-diff del {
-  background: rgba(220, 38, 38, 0.08);
-  color: #b91c1c;
+  background: rgba(176, 82, 74, 0.08);
+  color: #b0524a;
   text-decoration: line-through;
   border-radius: 3px;
 }
 .dark .version-diff ins {
-  background: rgba(96, 165, 250, 0.18);
-  color: #93c5fd;
+  background: rgba(125, 156, 184, 0.18);
+  color: #a9c1d6;
 }
 .dark .version-diff del {
-  background: rgba(248, 113, 113, 0.14);
-  color: #fca5a5;
+  background: rgba(201, 122, 114, 0.14);
+  color: #c97a72;
 }
 
 /* ── Chat (M7) ──────────────────────────────────────────────────────────────
@@ -262,7 +262,7 @@ body {
 .chat-markdown h2,
 .chat-markdown h3,
 .chat-markdown h4 {
-  font-weight: 650;
+  font-weight: 600;
   font-size: 1.05em;
   margin-top: 0.8em;
 }

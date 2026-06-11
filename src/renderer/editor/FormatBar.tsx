@@ -53,7 +53,7 @@ export function FormatBar({ editor }: { editor: TipTapEditor }): React.JSX.Eleme
   }
 
   return (
-    <BubbleMenu editor={editor} className="flex items-center gap-0.5 rounded-lg border border-hairline bg-surface p-1 shadow-lg">
+    <BubbleMenu editor={editor} className="flex items-center gap-0.5 rounded-lg border border-hairline bg-surface p-1 shadow-md">
       {s.noteLink ? (
         <Btn title="Remove note link" onClick={removeNoteLink}>
           Unlink

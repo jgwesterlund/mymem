@@ -32,7 +32,7 @@ export default function TrashView(): React.JSX.Element {
         {items.length > 0 && (
           <button
             onClick={() => void emptyTrash()}
-            className="rounded-md px-2.5 py-1 text-[12px] font-medium text-red-600 hover:bg-red-600/10 dark:text-red-400"
+            className="rounded-md px-2.5 py-1 text-[12px] font-medium text-[#b0524a] hover:bg-[#b0524a]/10 dark:text-[#c97a72]"
           >
             Empty Trash
           </button>
@@ -61,7 +61,7 @@ export default function TrashView(): React.JSX.Element {
                   </button>
                   <button
                     onClick={() => void deleteForever(n.id)}
-                    className="text-[11px] text-red-600 hover:underline dark:text-red-400"
+                    className="text-[11px] text-[#b0524a] hover:underline dark:text-[#c97a72]"
                   >
                     Delete forever
                   </button>

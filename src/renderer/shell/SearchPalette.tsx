@@ -69,7 +69,7 @@ export function SearchPalette(): React.JSX.Element | null {
   return (
     <div className="fixed inset-0 z-50 bg-black/20" onMouseDown={close}>
       <div
-        className="mx-auto mt-[14vh] w-[36rem] overflow-hidden rounded-xl border border-hairline bg-surface shadow-2xl"
+        className="mx-auto mt-[14vh] w-[36rem] overflow-hidden rounded-xl border border-hairline bg-surface shadow-lg"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <input

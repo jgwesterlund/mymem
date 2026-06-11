@@ -1,13 +1,20 @@
 #!/bin/bash
-# App icon pipeline (v1.1) — Apple-stock toolchain only, no Xcode and no npm deps:
+# App icon pipeline (v1.2) — Apple-stock toolchain only, no Xcode and no npm deps:
 #   Swift JIT (make-icon.swift) → 1024² resources/icon.png (master, kept)
 #   sips → iconset → iconutil → resources/icon.icns
-# electron-builder picks resources/icon.icns up automatically (buildResources).
+#   --tray mode → resources/tray/trayTemplate{,@2x}.png (menu bar template image:
+#   pure black "m" on transparent; the *Template name makes macOS tint it for
+#   light/dark menu bars). Packaged via extraResources (electron-builder.yml) —
+#   buildResources itself is NOT packaged.
 # Run: npm run icon   (or: bash scripts/make-icon.sh)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 swift scripts/make-icon.swift resources/icon.png
+
+mkdir -p resources/tray
+swift scripts/make-icon.swift --tray resources/tray/trayTemplate.png 18
+swift scripts/make-icon.swift --tray "resources/tray/trayTemplate@2x.png" 36
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

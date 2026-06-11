@@ -5,6 +5,7 @@ import { useCollectionsStore } from '../stores/collections'
 import { useNotesStore } from '../stores/notes'
 import { useTabsStore, selectActiveContent } from '../stores/tabs'
 import { useUiStore } from '../stores/ui'
+import { ModelPicker } from '../shell/ModelPicker'
 import { ChatMarkdown } from './ChatMarkdown'
 
 /**
@@ -38,12 +39,12 @@ function ToolCard({ item }: { item: ChatItem & { kind: 'tool' } }): React.JSX.El
   return (
     <div
       className={`my-1 flex items-center gap-2 rounded-md border px-2 py-1 text-[11px] ${
-        item.status === 'error' ? 'border-red-300 text-red-700 dark:border-red-800 dark:text-red-400' : 'border-hairline text-ink-muted'
+        item.status === 'error' ? 'border-[#b0524a]/40 text-[#b0524a] dark:border-[#c97a72]/40 dark:text-[#c97a72]' : 'border-hairline text-ink-muted'
       }`}
     >
       <span
         className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-          item.status === 'running' ? 'animate-pulse bg-accent' : item.status === 'ok' ? 'bg-green-500' : 'bg-red-500'
+          item.status === 'running' ? 'animate-pulse bg-accent' : item.status === 'ok' ? 'bg-[#6f8472]' : 'bg-[#b0524a]'
         }`}
       />
       <span className="truncate">{item.summary ?? item.label}</span>
@@ -56,7 +57,7 @@ function Message({ item }: { item: ChatItem }): React.JSX.Element | null {
   if (item.kind === 'user') {
     return (
       <div className="my-1.5 flex justify-end">
-        <div className="max-w-[88%] select-text whitespace-pre-wrap rounded-xl rounded-br-sm bg-accent/15 px-3 py-1.5 text-[13px]">
+        <div className="max-w-[88%] select-text whitespace-pre-wrap rounded-xl rounded-br-sm bg-accent/10 px-3 py-1.5 text-[13px]">
           {item.text}
         </div>
       </div>
@@ -139,7 +140,7 @@ function ChipPicker({ onClose }: { onClose: () => void }): React.JSX.Element {
   }
 
   return (
-    <div className="absolute bottom-full left-0 z-20 mb-1 w-72 overflow-hidden rounded-lg border border-hairline bg-surface shadow-xl">
+    <div className="absolute bottom-full left-0 z-20 mb-1 w-72 overflow-hidden rounded-lg border border-hairline bg-surface shadow-lg">
       <input
         autoFocus
         value={q}
@@ -305,21 +306,16 @@ function Composer(): React.JSX.Element {
             {currentLabel}
           </span>
         ) : (
-          <select
-            value={model ? `${model.providerId}|${model.modelId}` : ''}
-            onChange={(e) => {
-              const [providerId, modelId] = e.target.value.split('|')
-              if (providerId && modelId) useChatStore.getState().setModel({ providerId, modelId })
+          <ModelPicker
+            choices={modelChoices}
+            value={model}
+            noneLabel="No model"
+            direction="up"
+            triggerClassName="flex max-w-44 items-center gap-1 rounded border border-hairline bg-surface px-1.5 py-0.5 text-[11px] text-ink-muted hover:bg-hover"
+            onChange={(m) => {
+              if (m) useChatStore.getState().setModel(m)
             }}
-            className="max-w-44 rounded border border-hairline bg-surface px-1 py-0.5 text-[11px] text-ink-muted"
-          >
-            {!model && <option value="">No model</option>}
-            {modelChoices.map((c) => (
-              <option key={`${c.providerId}|${c.modelId}`} value={`${c.providerId}|${c.modelId}`}>
-                {c.label}
-              </option>
-            ))}
-          </select>
+          />
         )}
         {streaming ? (
           <button
@@ -426,7 +422,7 @@ export function ChatPanel(): React.JSX.Element {
               <Message key={item.key} item={item} />
             ))}
             {error && error.code === 'auth_expired' && (
-              <div className="my-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              <div className="my-2 rounded-md border border-[#a98e5f]/35 bg-[#a98e5f]/12 px-3 py-2 text-[12px] text-[#7a653f] dark:border-[#a98e5f]/35 dark:bg-[#a98e5f]/15 dark:text-[#cbb68a]">
                 Your AI session expired.{' '}
                 <button
                   onClick={() => useUiStore.getState().setSettingsOpen(true)}
@@ -437,7 +433,7 @@ export function ChatPanel(): React.JSX.Element {
               </div>
             )}
             {error && error.code !== 'auth_expired' && (
-              <div className="my-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+              <div className="my-2 rounded-md border border-[#b0524a]/35 bg-[#b0524a]/10 px-3 py-2 text-[12px] text-[#b0524a] dark:border-[#c97a72]/35 dark:bg-[#c97a72]/12 dark:text-[#c97a72]">
                 {error.message}
               </div>
             )}

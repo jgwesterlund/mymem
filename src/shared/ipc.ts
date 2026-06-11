@@ -71,6 +71,12 @@ export interface IpcInvokeMap {
     args: []
     result: { ok: true; version: string; electron: string; node: string }
   }
+  // Launch at login (v1.2): macOS 13+ routes app.set/getLoginItemSettings through
+  // SMAppService — works for unsigned apps (listed as 'myMem' under System
+  // Settings → Login Items). The OS can refuse a write, so the renderer re-reads
+  // after every set and reflects reality.
+  'app:getLoginItem': { args: []; result: { openAtLogin: boolean } }
+  'app:setLoginItem': { args: [{ openAtLogin: boolean }]; result: { ok: true } }
 
   // ── Notes ──────────────────────────────────────────────────────────────────
   'notes:create': {
@@ -242,7 +248,7 @@ export type PushChannel = keyof IpcPushMap
 // Runtime allowlists used by the preload bridge. Derived as literal lists (keyof is
 // type-level only); a unit test in M2 asserts these stay in sync with the maps above.
 export const INVOKE_CHANNELS = [
-  'app:ping',
+  'app:ping', 'app:getLoginItem', 'app:setLoginItem',
   'notes:create', 'notes:get', 'notes:update', 'notes:list', 'notes:trash', 'notes:restore',
   'notes:deleteForever', 'notes:emptyTrash', 'notes:import', 'notes:export',
   'collections:create', 'collections:update', 'collections:delete', 'collections:list',

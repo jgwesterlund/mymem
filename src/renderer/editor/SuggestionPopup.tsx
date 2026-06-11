@@ -15,7 +15,7 @@ export function SuggestionPopup(): React.JSX.Element | null {
   return (
     <div
       ref={listRef}
-      className="fixed z-50 max-h-64 w-64 overflow-y-auto rounded-lg border border-hairline bg-surface p-1 shadow-xl"
+      className="fixed z-50 max-h-64 w-64 overflow-y-auto rounded-lg border border-hairline bg-surface p-1 shadow-lg"
       style={{ left: rect.left, top: rect.bottom + 4 }}
     >
       {items.map((item, i) => (

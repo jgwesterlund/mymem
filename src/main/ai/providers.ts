@@ -14,9 +14,10 @@ import type { CredentialsStore } from './credentials'
 
 /**
  * Provider manager: two OAuth providers (Codex via ChatGPT subscription,
- * Anthropic via Claude Pro/Max) + two API-key providers. Our provider ids
- * double as pi-ai OAuth ids where applicable; 'anthropic-api' maps onto the
- * same pi-ai model catalog as 'anthropic'. GitHub Copilot: deliberate cut.
+ * Anthropic via Claude Pro/Max) + three API-key providers (OpenAI, Anthropic,
+ * OpenRouter). Our provider ids double as pi-ai OAuth ids where applicable;
+ * 'anthropic-api' maps onto the same pi-ai model catalog as 'anthropic'.
+ * GitHub Copilot: deliberate cut.
  */
 interface ProviderDef {
   id: string
@@ -34,7 +35,9 @@ const PROVIDERS: ProviderDef[] = [
   { id: 'openai-codex', label: 'OpenAI Codex (ChatGPT)', short: 'Codex', kind: 'oauth', catalog: 'openai-codex', oauthId: 'openai-codex' },
   { id: 'anthropic', label: 'Claude Pro/Max', short: 'Claude', kind: 'oauth', catalog: 'anthropic', oauthId: 'anthropic' },
   { id: 'openai', label: 'OpenAI API key', short: 'OpenAI', kind: 'apiKey', catalog: 'openai' },
-  { id: 'anthropic-api', label: 'Anthropic API key', short: 'Anthropic', kind: 'apiKey', catalog: 'anthropic' }
+  { id: 'anthropic-api', label: 'Anthropic API key', short: 'Anthropic', kind: 'apiKey', catalog: 'anthropic' },
+  // OpenRouter keys are 'sk-or-…' — the shared format-only check below (sk- prefix) covers them.
+  { id: 'openrouter', label: 'OpenRouter API key', short: 'OpenRouter', kind: 'apiKey', catalog: 'openrouter' }
 ]
 
 /** Thrown when a turn needs credentials that are missing/expired → ChatEvent error 'auth_expired'. */

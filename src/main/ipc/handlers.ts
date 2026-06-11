@@ -29,6 +29,7 @@ import { createTitlesService } from '../ai/titles'
 import { typedHandle, emitDataChanged, push } from './registry'
 import { getMainWindow } from '../windows/mainWindow'
 import { hideQuickCapture } from '../windows/quickCapture'
+import { setTrayEnabled } from '../tray'
 
 export interface Services {
   notes: ReturnType<typeof createNotesRepo>
@@ -155,6 +156,18 @@ export function registerIpcHandlers(): void {
     electron: process.versions.electron ?? 'unknown',
     node: process.versions.node ?? 'unknown'
   }))
+
+  // ── Launch at login (v1.2) ──
+  // macOS 13+ backs these with SMAppService — works for our unsigned app, which
+  // shows up as 'myMem' under System Settings → Login Items. The OS can refuse
+  // a write, so the renderer re-reads via app:getLoginItem and reflects reality.
+  typedHandle('app:getLoginItem', () => ({
+    openAtLogin: app.getLoginItemSettings().openAtLogin
+  }))
+  typedHandle('app:setLoginItem', ({ openAtLogin }) => {
+    app.setLoginItemSettings({ openAtLogin })
+    return { ok: true as const }
+  })
 
   // ── Notes ──
   typedHandle('notes:create', (input) => {
@@ -339,6 +352,8 @@ export function registerIpcHandlers(): void {
       if (value === true) s.embedder.start()
       else s.embedder.disable() // consent off takes effect immediately, stays restartable
     }
+    // Menu bar icon toggles live (default ON — only an explicit false disables).
+    if (key === 'ui.menuBarIcon') setTrayEnabled(value !== false)
     return { ok: true as const }
   })
   typedHandle('theme:set', ({ theme }) => {

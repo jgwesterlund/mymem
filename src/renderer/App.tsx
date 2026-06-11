@@ -22,7 +22,7 @@ function Toasts(): React.JSX.Element {
       {toasts.map((t) => (
         <div
           key={t.id}
-          className="pointer-events-auto flex items-center gap-3 rounded-lg border border-hairline bg-surface px-4 py-2 text-[13px] shadow-lg"
+          className="pointer-events-auto flex items-center gap-3 rounded-lg border border-hairline bg-surface px-4 py-2 text-[13px] shadow-md"
           onClick={() => useUiStore.getState().dismissToast(t.id)}
         >
           <span>{t.message}</span>

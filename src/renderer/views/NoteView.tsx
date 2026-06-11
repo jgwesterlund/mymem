@@ -385,7 +385,7 @@ export default function NoteView({
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       {banner && (
-        <div className="flex items-center justify-between border-b border-hairline bg-amber-100 px-4 py-1.5 text-[12px] text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+        <div className="flex items-center justify-between border-b border-hairline bg-[#a98e5f]/15 px-4 py-1.5 text-[12px] text-[#7a653f] dark:bg-[#a98e5f]/15 dark:text-[#cbb68a]">
           <span>
             {banner === 'conflict'
               ? 'Save conflict — this note changed elsewhere.'
@@ -401,7 +401,7 @@ export default function NoteView({
               }
               setEpoch((e) => e + 1)
             }}
-            className="rounded-md bg-amber-200 px-2 py-0.5 font-medium hover:bg-amber-300 dark:bg-amber-900 dark:hover:bg-amber-800"
+            className="rounded-md bg-[#a98e5f]/25 px-2 py-0.5 font-medium hover:bg-[#a98e5f]/35 dark:bg-[#a98e5f]/30 dark:hover:bg-[#a98e5f]/40"
           >
             Reload
           </button>
@@ -470,7 +470,7 @@ export default function NoteView({
                 <>
                   {/* click-away layer under the menu */}
                   <div className="fixed inset-0 z-40" onMouseDown={() => setMoreOpen(false)} />
-                  <div className="absolute right-0 top-5 z-50 w-44 rounded-lg border border-hairline bg-surface p-1 shadow-xl">
+                  <div className="absolute right-0 top-5 z-50 w-44 rounded-lg border border-hairline bg-surface p-1 shadow-lg">
                     <button
                       onClick={() => {
                         setMoreOpen(false)

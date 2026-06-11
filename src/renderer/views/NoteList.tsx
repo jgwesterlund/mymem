@@ -91,7 +91,7 @@ export function NoteList({
                 e.stopPropagation()
                 void invoke('notes:trash', { id: n.id })
               }}
-              className="hidden shrink-0 text-[11px] text-ink-muted hover:text-red-600 group-hover:block dark:hover:text-red-400"
+              className="hidden shrink-0 text-[11px] text-ink-muted hover:text-[#b0524a] group-hover:block dark:hover:text-[#c97a72]"
             >
               Trash
             </button>

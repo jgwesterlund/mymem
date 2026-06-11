@@ -3,6 +3,7 @@ import type { ModelChoice, ProviderStatus, Template } from '@shared/types'
 import { invoke, on } from '../api'
 import { useUiStore, toast } from '../stores/ui'
 import { useChatStore } from '../stores/chat'
+import { ModelPicker } from '../shell/ModelPicker'
 
 /**
  * Settings overlay (Cmd+,): a modal in the main window — deliberately NOT a
@@ -141,7 +142,7 @@ function ApiKeyCard({ provider, onSaved }: { provider: ProviderStatus; onSaved: 
           Save
         </button>
       </div>
-      {error && <p className="mt-1 text-[11px] text-red-700 dark:text-red-400">{error}</p>}
+      {error && <p className="mt-1 text-[11px] text-[#b0524a] dark:text-[#c97a72]">{error}</p>}
     </div>
   )
 }
@@ -204,11 +205,18 @@ function AiSection(): React.JSX.Element {
   if (!status) return <div />
   const oauthProviders = status.providers.filter((p) => p.kind === 'oauth')
   const keyProviders = status.providers.filter((p) => p.kind === 'apiKey')
+  // 'providerId|modelId' ⇄ ModelPicker's { providerId, modelId } | null
+  const parseModel = (v: string): { providerId: string; modelId: string } | null => {
+    const [providerId, modelId] = v.split('|')
+    return providerId && modelId ? { providerId, modelId } : null
+  }
+  const pickerTrigger =
+    'mt-1 flex w-full items-center justify-between gap-1 rounded-md border border-hairline bg-surface px-2 py-1 text-[12px] hover:bg-hover'
 
   return (
     <div className="flex flex-col gap-3">
       {!status.encryptionAvailable && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+        <div className="rounded-md border border-[#a98e5f]/35 bg-[#a98e5f]/12 px-3 py-2 text-[12px] text-[#7a653f] dark:border-[#a98e5f]/35 dark:bg-[#a98e5f]/15 dark:text-[#cbb68a]">
           AI is disabled: macOS keychain encryption is unavailable, so credentials cannot be stored securely.
         </div>
       )}
@@ -231,49 +239,33 @@ function AiSection(): React.JSX.Element {
 
       <div className="mt-2">
         <p className="text-[12px] font-medium">Default chat model</p>
-        <select
-          value={defaultModel}
-          onChange={(e) => {
-            setDefaultModel(e.target.value)
-            const [providerId, modelId] = e.target.value.split('|')
-            void invoke('settings:set', {
-              key: 'ai.defaultModel',
-              value: providerId && modelId ? { providerId, modelId } : null
-            })
+        <ModelPicker
+          choices={models}
+          value={parseModel(defaultModel)}
+          noneLabel="First available"
+          selectableNone
+          triggerClassName={pickerTrigger}
+          onChange={(m) => {
+            setDefaultModel(m ? `${m.providerId}|${m.modelId}` : '')
+            void invoke('settings:set', { key: 'ai.defaultModel', value: m })
           }}
-          className="mt-1 w-full rounded-md border border-hairline bg-surface px-2 py-1 text-[12px]"
-        >
-          <option value="">First available</option>
-          {models.map((m) => (
-            <option key={`${m.providerId}|${m.modelId}`} value={`${m.providerId}|${m.modelId}`}>
-              {m.label}
-            </option>
-          ))}
-        </select>
+        />
       </div>
 
       <div>
         <p className="text-[12px] font-medium">Utility model</p>
         <p className="text-[11px] text-ink-muted">Cheap model for note titles and auto-organize.</p>
-        <select
-          value={utilityModel}
-          onChange={(e) => {
-            setUtilityModel(e.target.value)
-            const [providerId, modelId] = e.target.value.split('|')
-            void invoke('settings:set', {
-              key: 'ai.utilityModel',
-              value: providerId && modelId ? { providerId, modelId } : null
-            })
+        <ModelPicker
+          choices={models}
+          value={parseModel(utilityModel)}
+          noneLabel="Cheapest available"
+          selectableNone
+          triggerClassName={pickerTrigger}
+          onChange={(m) => {
+            setUtilityModel(m ? `${m.providerId}|${m.modelId}` : '')
+            void invoke('settings:set', { key: 'ai.utilityModel', value: m })
           }}
-          className="mt-1 w-full rounded-md border border-hairline bg-surface px-2 py-1 text-[12px]"
-        >
-          <option value="">Cheapest available</option>
-          {models.map((m) => (
-            <option key={`${m.providerId}|${m.modelId}`} value={`${m.providerId}|${m.modelId}`}>
-              {m.label}
-            </option>
-          ))}
-        </select>
+        />
       </div>
 
       <div>
@@ -297,10 +289,16 @@ type Theme = 'light' | 'dark' | 'system'
 
 function GeneralSection(): React.JSX.Element {
   const [theme, setTheme] = useState<Theme>('system')
+  const [menuBarIcon, setMenuBarIcon] = useState(true)
+  const [loginItem, setLoginItem] = useState(false)
   useEffect(() => {
     void invoke('settings:get', { key: 'ui.theme' }).then((v) => {
       if (v === 'light' || v === 'dark' || v === 'system') setTheme(v)
     })
+    // Default ON: only an explicit false means hidden (matches main's tray guard).
+    void invoke('settings:get', { key: 'ui.menuBarIcon' }).then((v) => setMenuBarIcon(v !== false))
+    // Login item state lives in the OS, not our settings DB — read it fresh.
+    void invoke('app:getLoginItem').then((v) => setLoginItem(v.openAtLogin))
   }, [])
   return (
     <div className="flex flex-col gap-3">
@@ -325,6 +323,44 @@ function GeneralSection(): React.JSX.Element {
           <option value="light">Light</option>
           <option value="dark">Dark</option>
         </select>
+      </div>
+      <div className="flex items-center justify-between rounded-lg border border-hairline px-3 py-2.5">
+        <div>
+          <p className="text-[13px] font-medium">Show menu bar icon</p>
+          <p className="text-[11px] text-ink-muted">Quick access to myMem and Quick Capture from the menu bar.</p>
+        </div>
+        <input
+          type="checkbox"
+          checked={menuBarIcon}
+          onChange={(e) => {
+            setMenuBarIcon(e.target.checked)
+            // Main toggles the tray live on this settings:set (handlers.ts).
+            void invoke('settings:set', { key: 'ui.menuBarIcon', value: e.target.checked })
+          }}
+        />
+      </div>
+      <div className="flex items-center justify-between rounded-lg border border-hairline px-3 py-2.5">
+        <div>
+          <p className="text-[13px] font-medium">Start myMem at login</p>
+          <p className="text-[11px] text-ink-muted">Starts in the background — menu bar icon and ⌃⌘Space only.</p>
+        </div>
+        <input
+          type="checkbox"
+          checked={loginItem}
+          onChange={(e) => {
+            const wanted = e.target.checked
+            setLoginItem(wanted) // optimistic; corrected by the re-read below
+            void invoke('app:setLoginItem', { openAtLogin: wanted }).then(() =>
+              invoke('app:getLoginItem').then((v) => {
+                // The OS owns this state and can refuse — reflect reality.
+                setLoginItem(v.openAtLogin)
+                if (v.openAtLogin !== wanted) {
+                  toast('macOS declined the change — see System Settings → Login Items')
+                }
+              })
+            )
+          }}
+        />
       </div>
       <div>
         <p className="text-[12px] font-medium">Quick capture</p>
@@ -395,7 +431,7 @@ function TemplateRow({ t, onChanged }: { t: Template; onChanged: () => void }): 
                   if (!window.confirm(`Delete template “${t.name}”?`)) return
                   void invoke('templates:delete', { id: t.id }).then(onChanged)
                 }}
-                className="rounded-md border border-hairline px-2.5 py-1 text-[12px] text-red-700 hover:bg-hover dark:text-red-400"
+                className="rounded-md border border-hairline px-2.5 py-1 text-[12px] text-[#b0524a] hover:bg-hover dark:text-[#c97a72]"
               >
                 Delete
               </button>
@@ -508,7 +544,7 @@ export function SettingsOverlay(): React.JSX.Element | null {
     <div className="fixed inset-0 z-50 bg-black/25" onMouseDown={() => useUiStore.getState().setSettingsOpen(false)}>
       <div
         onMouseDown={(e) => e.stopPropagation()}
-        className="mx-auto mt-[10vh] flex h-[70vh] w-[44rem] overflow-hidden rounded-xl border border-hairline bg-surface shadow-2xl"
+        className="mx-auto mt-[10vh] flex h-[70vh] w-[44rem] overflow-hidden rounded-xl border border-hairline bg-surface shadow-lg"
       >
         <div className="w-40 shrink-0 border-r border-hairline bg-surface-dim p-2">
           <p className="px-2.5 pb-2 pt-1 text-[13px] font-semibold">Settings</p>

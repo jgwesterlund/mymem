@@ -71,7 +71,7 @@ export default function OrganizeModal({
   return (
     <div className="fixed inset-0 z-50 bg-black/20" onMouseDown={onClose}>
       <div
-        className="mx-auto mt-[16vh] flex max-h-[60vh] w-96 flex-col overflow-hidden rounded-xl border border-hairline bg-surface shadow-2xl"
+        className="mx-auto mt-[16vh] flex max-h-[60vh] w-96 flex-col overflow-hidden rounded-xl border border-hairline bg-surface shadow-lg"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="border-b border-hairline px-4 py-2.5 text-[12px] font-semibold">Organize</div>
