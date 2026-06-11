@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { invoke } from '../api'
-import { useTabsStore, type PaneContent } from '../stores/tabs'
+import { openContent, type PaneContent } from '../stores/tabs'
 import { useUiStore } from '../stores/ui'
 
 type Row = { kind: 'note'; noteId: string; title: string } | { kind: 'query'; query: string }
@@ -10,8 +10,9 @@ const TYPEAHEAD_DEBOUNCE_MS = 120
 /**
  * Cmd+K palette. Typeahead is title-LIKE only — NEVER FTS per keystroke; the
  * trailing 'Search for …' row (or Enter with no match selected) opens a
- * full-text results tab instead. Enter opens in the current tab, Cmd+Enter in
- * a new one, Esc closes.
+ * full-text results tab instead. App-wide modifier contract (Enter AND click):
+ * plain = current pane, ⌘ = new tab, ⌥ = other pane (splitting if needed).
+ * Esc closes.
  */
 export function SearchPalette(): React.JSX.Element | null {
   const open = useUiStore((s) => s.searchPaletteOpen)
@@ -52,7 +53,7 @@ export function SearchPalette(): React.JSX.Element | null {
     useUiStore.getState().setSearchPaletteOpen(false)
   }
 
-  function openRow(row: Row | undefined, inNewTab: boolean): void {
+  function openRow(row: Row | undefined, target: 'self' | 'tab' | 'pane'): void {
     const content: PaneContent | null = row
       ? row.kind === 'note'
         ? { kind: 'note', noteId: row.noteId }
@@ -61,9 +62,7 @@ export function SearchPalette(): React.JSX.Element | null {
         ? { kind: 'search', query }
         : null
     if (!content) return
-    const tabs = useTabsStore.getState()
-    if (inNewTab) tabs.openTab(content)
-    else tabs.openInCurrentTab(content)
+    openContent(content, target)
     close()
   }
 
@@ -89,7 +88,7 @@ export function SearchPalette(): React.JSX.Element | null {
               setSel((s) => (rows.length ? (s - 1 + rows.length) % rows.length : 0))
             } else if (e.key === 'Enter') {
               e.preventDefault()
-              openRow(rows[sel], e.metaKey)
+              openRow(rows[sel], e.metaKey ? 'tab' : e.altKey ? 'pane' : 'self')
             }
           }}
           placeholder="Search notes…"
@@ -101,7 +100,7 @@ export function SearchPalette(): React.JSX.Element | null {
               <button
                 key={row.kind === 'note' ? row.noteId : '__query'}
                 onMouseEnter={() => setSel(i)}
-                onClick={(e) => openRow(row, e.metaKey)}
+                onClick={(e) => openRow(row, e.metaKey ? 'tab' : e.altKey ? 'pane' : 'self')}
                 className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-[13px] ${
                   i === sel ? 'bg-accent/15' : ''
                 }`}
@@ -114,7 +113,9 @@ export function SearchPalette(): React.JSX.Element | null {
                   </span>
                 )}
                 {i === sel && (
-                  <span className="ml-2 shrink-0 text-[11px] text-ink-muted">↩ open · ⌘↩ new tab</span>
+                  <span className="ml-2 shrink-0 text-[11px] text-ink-muted">
+                    ↩ open · ⌘↩ new tab · ⌥↩ other pane
+                  </span>
                 )}
               </button>
             ))}

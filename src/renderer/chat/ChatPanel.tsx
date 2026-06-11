@@ -24,7 +24,7 @@ function Thinking({ text }: { text: string }): React.JSX.Element | null {
         {open ? '▾' : '▸'} Thinking…
       </button>
       {open && (
-        <pre className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md bg-black/[0.04] px-2 py-1.5 font-mono text-[11px] leading-relaxed text-ink-muted">
+        <pre className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-md bg-hover px-2 py-1.5 font-mono text-[11px] leading-relaxed text-ink-muted">
           {text}
         </pre>
       )}
@@ -36,7 +36,7 @@ function ToolCard({ item }: { item: ChatItem & { kind: 'tool' } }): React.JSX.El
   return (
     <div
       className={`my-1 flex items-center gap-2 rounded-md border px-2 py-1 text-[11px] ${
-        item.status === 'error' ? 'border-red-300 text-red-700' : 'border-hairline text-ink-muted'
+        item.status === 'error' ? 'border-red-300 text-red-700 dark:border-red-800 dark:text-red-400' : 'border-hairline text-ink-muted'
       }`}
     >
       <span
@@ -92,7 +92,7 @@ function ConversationList(): React.JSX.Element {
         <div
           key={c.id}
           onClick={() => void useChatStore.getState().openChat(c.id)}
-          className="group flex cursor-default items-center justify-between rounded-md px-2.5 py-1.5 hover:bg-black/5"
+          className="group flex cursor-default items-center justify-between rounded-md px-2.5 py-1.5 hover:bg-hover"
         >
           <div className="min-w-0">
             <div className="truncate text-[13px]">{c.title || 'New chat'}</div>
@@ -103,7 +103,7 @@ function ConversationList(): React.JSX.Element {
               e.stopPropagation()
               void useChatStore.getState().deleteChat(c.id)
             }}
-            className="hidden shrink-0 rounded px-1.5 text-[11px] text-ink-muted hover:bg-black/10 group-hover:block"
+            className="hidden shrink-0 rounded px-1.5 text-[11px] text-ink-muted hover:bg-active group-hover:block"
             title="Delete conversation"
           >
             ✕
@@ -153,7 +153,7 @@ function ChipPicker({ onClose }: { onClose: () => void }): React.JSX.Element {
           <button
             key={n.noteId}
             onClick={() => add({ type: 'note', id: n.noteId, label: n.title || 'Untitled' })}
-            className="block w-full truncate rounded px-2 py-1 text-left text-[12px] hover:bg-black/5"
+            className="block w-full truncate rounded px-2 py-1 text-left text-[12px] hover:bg-hover"
           >
             📄 {n.title || 'Untitled'}
           </button>
@@ -162,7 +162,7 @@ function ChipPicker({ onClose }: { onClose: () => void }): React.JSX.Element {
           <button
             key={c.id}
             onClick={() => add({ type: 'collection', id: c.id, label: c.name })}
-            className="block w-full truncate rounded px-2 py-1 text-left text-[12px] hover:bg-black/5"
+            className="block w-full truncate rounded px-2 py-1 text-left text-[12px] hover:bg-hover"
           >
             🗂 {c.name}
           </button>
@@ -213,7 +213,7 @@ function Composer(): React.JSX.Element {
         <button
           onClick={() => setPickerOpen((o) => !o)}
           title="Attach context"
-          className="rounded-full border border-hairline px-2 py-0.5 text-[11px] text-ink-muted hover:bg-black/5"
+          className="rounded-full border border-hairline px-2 py-0.5 text-[11px] text-ink-muted hover:bg-hover"
         >
           + context
         </button>
@@ -263,7 +263,7 @@ function Composer(): React.JSX.Element {
         {streaming ? (
           <button
             onClick={() => useChatStore.getState().cancel()}
-            className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-black/5"
+            className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-hover"
           >
             Stop
           </button>
@@ -311,7 +311,7 @@ export function ChatPanel(): React.JSX.Element {
         <button
           onClick={() => useChatStore.getState().setListOpen(!listOpen)}
           title="Conversations"
-          className="rounded px-1.5 py-0.5 text-[12px] text-ink-muted hover:bg-black/5"
+          className="rounded px-1.5 py-0.5 text-[12px] text-ink-muted hover:bg-hover"
         >
           ☰
         </button>
@@ -321,7 +321,7 @@ export function ChatPanel(): React.JSX.Element {
         <button
           onClick={() => useChatStore.getState().newChat()}
           title="New chat"
-          className="rounded px-1.5 py-0.5 text-[13px] text-ink-muted hover:bg-black/5"
+          className="rounded px-1.5 py-0.5 text-[13px] text-ink-muted hover:bg-hover"
         >
           +
         </button>
@@ -362,7 +362,7 @@ export function ChatPanel(): React.JSX.Element {
               <Message key={item.key} item={item} />
             ))}
             {error && error.code === 'auth_expired' && (
-              <div className="my-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+              <div className="my-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
                 Your AI session expired.{' '}
                 <button
                   onClick={() => useUiStore.getState().setSettingsOpen(true)}
@@ -373,7 +373,7 @@ export function ChatPanel(): React.JSX.Element {
               </div>
             )}
             {error && error.code !== 'auth_expired' && (
-              <div className="my-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-800">
+              <div className="my-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
                 {error.message}
               </div>
             )}

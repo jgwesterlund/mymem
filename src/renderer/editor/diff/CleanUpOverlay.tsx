@@ -204,7 +204,7 @@ export default function CleanUpOverlay({
             <p className="text-[12px] text-ink-muted">Cleaning up this note…</p>
             <button
               onClick={onClose}
-              className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-black/5"
+              className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-hover"
             >
               Cancel
             </button>
@@ -212,7 +212,7 @@ export default function CleanUpOverlay({
         )}
         {phase === 'error' && (
           <div className="flex h-full flex-col items-center justify-center gap-3">
-            <p className="max-w-md text-center text-[13px] text-red-700">{error}</p>
+            <p className="max-w-md text-center text-[13px] text-red-700 dark:text-red-400">{error}</p>
             <div className="flex gap-2">
               <button
                 onClick={() => setAttempt((a) => a + 1)}
@@ -222,7 +222,7 @@ export default function CleanUpOverlay({
               </button>
               <button
                 onClick={onClose}
-                className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-black/5"
+                className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-hover"
               >
                 Close
               </button>
@@ -251,13 +251,13 @@ export default function CleanUpOverlay({
           <button
             onClick={refine}
             disabled={!refineText.trim() || refinesLeft <= 0 || busy}
-            className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-black/5 disabled:opacity-50"
+            className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-hover disabled:opacity-50"
           >
             Refine
           </button>
           <button
             onClick={onClose}
-            className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-black/5"
+            className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-hover"
           >
             Cancel
           </button>

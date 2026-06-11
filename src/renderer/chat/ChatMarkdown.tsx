@@ -1,6 +1,6 @@
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import type { Components } from 'react-markdown'
-import { useTabsStore } from '../stores/tabs'
+import { openContent } from '../stores/tabs'
 
 /**
  * Assistant-message markdown: mymem://note/<id> citations render as chips,
@@ -13,12 +13,6 @@ const NOTE_HREF = /^mymem:\/\/note\/([0-9a-f-]{36})$/i
 // mymem://note/<uuid> shape — an identity transform would re-enable javascript: URLs.
 const urlTransform = (url: string): string => (NOTE_HREF.test(url) ? url : defaultUrlTransform(url))
 
-function openNote(noteId: string, inNewTab: boolean): void {
-  const tabs = useTabsStore.getState()
-  if (inNewTab) tabs.openTab({ kind: 'note', noteId })
-  else tabs.openInCurrentTab({ kind: 'note', noteId })
-}
-
 // 'a' override: mymem://note/<id> → CitationChip; everything else opens externally
 // (target=_blank → main's setWindowOpenHandler → shell.openExternal).
 const markdownComponents: Components = {
@@ -28,8 +22,10 @@ const markdownComponents: Components = {
       const noteId = m[1]!
       return (
         <button
-          onClick={(e) => openNote(noteId, e.metaKey)}
-          title="Open note (⌘-click: new tab)"
+          onClick={(e) =>
+            openContent({ kind: 'note', noteId }, e.metaKey ? 'tab' : e.altKey ? 'pane' : 'self')
+          }
+          title="Open note (⌘-click: new tab · ⌥-click: other pane)"
           className="citation-chip"
         >
           {children}

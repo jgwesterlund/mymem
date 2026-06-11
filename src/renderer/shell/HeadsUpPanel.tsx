@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { EmbeddingsStatus, RelatedCollection, RelatedNote } from '@shared/types'
 import { invoke, on } from '../api'
-import { useTabsStore } from '../stores/tabs'
+import { openContent, useTabsStore, selectActiveContent } from '../stores/tabs'
 
 /**
  * Heads Up: related notes/collections for the active note tab. Refreshes
@@ -49,7 +49,7 @@ function DownloadingCard({ status }: { status: EmbeddingsStatus }): React.JSX.El
   return (
     <div className="m-3 rounded-lg border border-hairline bg-surface-dim px-4 py-3">
       <p className="text-[13px] font-medium">Downloading model… {pct}%</p>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/10">
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-active">
         <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${pct}%` }} />
       </div>
     </div>
@@ -63,7 +63,7 @@ function ErrorCard({ status }: { status: EmbeddingsStatus }): React.JSX.Element 
       <p className="mt-1 break-words text-[12px] text-ink-muted">{status.error ?? 'Unknown error.'}</p>
       <button
         onClick={() => void invoke('settings:set', { key: 'embeddings.consent', value: true })}
-        className="mt-2 rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-black/5"
+        className="mt-2 rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-hover"
       >
         Retry
       </button>
@@ -76,7 +76,7 @@ function Empty({ text }: { text: string }): React.JSX.Element {
 }
 
 export function HeadsUpPanel(): React.JSX.Element {
-  const activeContent = useTabsStore((s) => s.tabs[s.activeTabIndex]?.content)
+  const activeContent = useTabsStore(selectActiveContent)
   const noteId = activeContent?.kind === 'note' ? activeContent.noteId : null
   const [status, setStatus] = useState<EmbeddingsStatus | null>(null)
   const [related, setRelated] = useState<Related | null>(null)
@@ -142,10 +142,9 @@ export function HeadsUpPanel(): React.JSX.Element {
     }
   }, [noteId, ready, broadened, refresh])
 
-  function openNote(id: string, inNewTab: boolean): void {
-    const tabs = useTabsStore.getState()
-    if (inNewTab) tabs.openTab({ kind: 'note', noteId: id })
-    else tabs.openInCurrentTab({ kind: 'note', noteId: id })
+  // App-wide modifier contract: ⌘-click = new tab, ⌥-click = other pane.
+  function openNote(id: string, e: React.MouseEvent): void {
+    openContent({ kind: 'note', noteId: id }, e.metaKey ? 'tab' : e.altKey ? 'pane' : 'self')
   }
 
   if (!noteId) return <Empty text="Open a note to see related notes." />
@@ -167,11 +166,11 @@ export function HeadsUpPanel(): React.JSX.Element {
           {related.notes.map((n) => (
             <div
               key={n.noteId}
-              onClick={(e) => openNote(n.noteId, e.metaKey)}
-              className="group cursor-default rounded-lg px-2.5 py-1.5 hover:bg-black/5"
+              onClick={(e) => openNote(n.noteId, e)}
+              className="group cursor-default rounded-lg px-2.5 py-1.5 hover:bg-hover"
             >
               <div className="truncate text-[13px] font-medium">{n.title || 'Untitled'}</div>
-              <div className="mt-1 h-0.5 w-full overflow-hidden rounded-full bg-black/5">
+              <div className="mt-1 h-0.5 w-full overflow-hidden rounded-full bg-hover">
                 <div
                   className="h-full rounded-full bg-accent/60"
                   style={{ width: `${Math.round(Math.max(0, Math.min(1, n.score)) * 100)}%` }}
@@ -191,10 +190,13 @@ export function HeadsUpPanel(): React.JSX.Element {
             {related.collections.map((c) => (
               <button
                 key={c.collectionId}
-                onClick={() =>
-                  useTabsStore.getState().openInCurrentTab({ kind: 'collection', collectionId: c.collectionId })
+                onClick={(e) =>
+                  openContent(
+                    { kind: 'collection', collectionId: c.collectionId },
+                    e.metaKey ? 'tab' : e.altKey ? 'pane' : 'self'
+                  )
                 }
-                className="rounded-full border border-hairline px-2 py-0.5 text-[11px] hover:bg-black/5"
+                className="rounded-full border border-hairline px-2 py-0.5 text-[11px] hover:bg-hover"
               >
                 {c.name}
               </button>
@@ -208,7 +210,7 @@ export function HeadsUpPanel(): React.JSX.Element {
           <button
             disabled={loading}
             onClick={() => void refresh(true)}
-            className="w-full rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-black/5 disabled:opacity-50"
+            className="w-full rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-hover disabled:opacity-50"
           >
             Find More
           </button>

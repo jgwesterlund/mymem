@@ -1,5 +1,5 @@
 import { writeFileSync } from 'node:fs'
-import { app, dialog } from 'electron'
+import { app, dialog, nativeTheme } from 'electron'
 import { uuidv7 } from 'uuidv7'
 import { getDb } from '../db/connection'
 import { createNotesRepo } from '../db/repos/notesRepo'
@@ -339,6 +339,16 @@ export function registerIpcHandlers(): void {
       if (value === true) s.embedder.start()
       else s.embedder.disable() // consent off takes effect immediately, stays restartable
     }
+    return { ok: true as const }
+  })
+  typedHandle('theme:set', ({ theme }) => {
+    if (theme !== 'light' && theme !== 'dark' && theme !== 'system') {
+      throw new Error(`invalid theme '${String(theme)}'`)
+    }
+    s.settings.set('ui.theme', theme)
+    // themeSource fires nativeTheme 'updated' → index.ts pushes theme:changed →
+    // the renderer toggles .dark. The renderer never writes back, so no loop.
+    nativeTheme.themeSource = theme
     return { ok: true as const }
   })
 

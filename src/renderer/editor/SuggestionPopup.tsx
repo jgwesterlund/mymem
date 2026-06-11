@@ -26,7 +26,7 @@ export function SuggestionPopup(): React.JSX.Element | null {
             pick(i)
           }}
           className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[13px] ${
-            i === selectedIndex ? 'bg-accent/15 text-ink' : 'text-ink hover:bg-black/5'
+            i === selectedIndex ? 'bg-accent/15 text-ink' : 'text-ink hover:bg-hover'
           }`}
         >
           <span className="truncate">{item.label}</span>

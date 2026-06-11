@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { NoteListItem } from '@shared/types'
 import { invoke } from '../api'
-import { useTabsStore } from '../stores/tabs'
+import { openContent } from '../stores/tabs'
 
 function isTextTarget(e: KeyboardEvent): boolean {
   const t = e.target
@@ -13,12 +13,21 @@ function isTextTarget(e: KeyboardEvent): boolean {
 }
 
 /**
- * Shared notes list (Home + Collection): click opens in the current tab
- * (pushing history), Cmd+click opens a new tab, j/k/Enter keyboard nav,
- * hover trash button. Only mounted in the active tab, so a window-level
- * keydown listener is safe.
+ * Shared notes list (Home + Collection). App-wide modifier contract for both
+ * click and Enter: plain = current pane (pushing history), ⌘ = new tab,
+ * ⌥ = other pane (splitting if needed). j/k keyboard nav, hover trash button.
+ * Only the ACTIVE tab mounts — but a split tab can mount two lists, so the
+ * window-level keydown listener is gated on the pane's `focused` flag.
  */
-export function NoteList({ items, empty }: { items: NoteListItem[]; empty: string }): React.JSX.Element {
+export function NoteList({
+  items,
+  empty,
+  focused = true
+}: {
+  items: NoteListItem[]
+  empty: string
+  focused?: boolean
+}): React.JSX.Element {
   const [sel, setSel] = useState(0)
 
   useEffect(() => {
@@ -26,30 +35,32 @@ export function NoteList({ items, empty }: { items: NoteListItem[]; empty: strin
   }, [items.length])
 
   useEffect(() => {
+    if (!focused) return
     function onKey(e: KeyboardEvent): void {
-      if (isTextTarget(e) || e.metaKey || e.ctrlKey || e.altKey) return
+      if (isTextTarget(e) || e.ctrlKey) return
+      if (e.key === 'Enter') {
+        const item = items[sel]
+        if (!item) return
+        e.preventDefault()
+        // Same contract as clicks: ⌘↩ new tab, ⌥↩ other pane (split if needed).
+        openContent({ kind: 'note', noteId: item.id }, e.metaKey ? 'tab' : e.altKey ? 'pane' : 'self')
+        return
+      }
+      if (e.metaKey || e.altKey) return
       if (e.key === 'j' || e.key === 'ArrowDown') {
         e.preventDefault()
         setSel((s) => Math.min(s + 1, items.length - 1))
       } else if (e.key === 'k' || e.key === 'ArrowUp') {
         e.preventDefault()
         setSel((s) => Math.max(s - 1, 0))
-      } else if (e.key === 'Enter') {
-        const item = items[sel]
-        if (item) {
-          e.preventDefault()
-          useTabsStore.getState().openInCurrentTab({ kind: 'note', noteId: item.id })
-        }
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [items, sel])
+  }, [items, sel, focused])
 
-  function open(item: NoteListItem, metaKey: boolean): void {
-    const tabs = useTabsStore.getState()
-    if (metaKey) tabs.openTab({ kind: 'note', noteId: item.id })
-    else tabs.openInCurrentTab({ kind: 'note', noteId: item.id })
+  function open(item: NoteListItem, e: React.MouseEvent): void {
+    openContent({ kind: 'note', noteId: item.id }, e.metaKey ? 'tab' : e.altKey ? 'pane' : 'self')
   }
 
   if (items.length === 0) {
@@ -61,9 +72,10 @@ export function NoteList({ items, empty }: { items: NoteListItem[]; empty: strin
       {items.map((n, i) => (
         <div
           key={n.id}
-          onClick={(e) => open(n, e.metaKey)}
+          data-testid="note-list-item"
+          onClick={(e) => open(n, e)}
           onMouseEnter={() => setSel(i)}
-          className={`group cursor-default rounded-lg px-3 py-2 ${i === sel ? 'bg-black/5' : ''}`}
+          className={`group cursor-default rounded-lg px-3 py-2 ${i === sel ? 'bg-hover' : ''}`}
         >
           <div className="flex items-baseline justify-between gap-3">
             <span className="truncate text-[14px] font-medium">{n.title || 'Untitled'}</span>
@@ -79,7 +91,7 @@ export function NoteList({ items, empty }: { items: NoteListItem[]; empty: strin
                 e.stopPropagation()
                 void invoke('notes:trash', { id: n.id })
               }}
-              className="hidden shrink-0 text-[11px] text-ink-muted hover:text-red-600 group-hover:block"
+              className="hidden shrink-0 text-[11px] text-ink-muted hover:text-red-600 group-hover:block dark:hover:text-red-400"
             >
               Trash
             </button>

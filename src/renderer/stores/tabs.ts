@@ -2,29 +2,44 @@ import { create } from 'zustand'
 import { invoke } from '../api'
 
 /**
- * The tabs store IS the router (no react-router). One pane per tab in M2; the
- * M9 split is additive (Tab grows a second content+history pair, actions keep
- * their signatures and operate on the focused pane).
+ * The tabs store IS the router (no react-router). M9: each Tab owns 1–2 Panes
+ * (Cmd+. split); every pane keeps its own back/forward history. Actions keep
+ * their M2 signatures and operate on the ACTIVE pane of the active tab.
  */
 export type PaneContent =
   | { kind: 'home' }
   | { kind: 'note'; noteId: string }
   | { kind: 'collection'; collectionId: string }
-  | { kind: 'search'; query: string } // rendered as a stub until M3
+  | { kind: 'search'; query: string }
   | { kind: 'trash' }
 
-export interface Tab {
-  id: string
+export interface Pane {
   content: PaneContent // always === history[historyIndex]
   history: PaneContent[]
   historyIndex: number
 }
 
+export interface Tab {
+  id: string
+  panes: Pane[] // length 1 (normal) or 2 (split)
+  activePane: number // index into panes
+}
+
 const HISTORY_CAP = 50
+
+function makePane(content: PaneContent): Pane {
+  return { content, history: [content], historyIndex: 0 }
+}
 
 let nextTabId = 1
 function makeTab(content: PaneContent): Tab {
-  return { id: `tab-${nextTabId++}-${Date.now().toString(36)}`, content, history: [content], historyIndex: 0 }
+  return { id: `tab-${nextTabId++}-${Date.now().toString(36)}`, panes: [makePane(content)], activePane: 0 }
+}
+
+function pushContent(pane: Pane, content: PaneContent): Pane {
+  if (JSON.stringify(pane.content) === JSON.stringify(content)) return pane
+  const history = [...pane.history.slice(0, pane.historyIndex + 1), content].slice(-HISTORY_CAP)
+  return { content, history, historyIndex: history.length - 1 }
 }
 
 interface TabsState {
@@ -32,6 +47,11 @@ interface TabsState {
   activeTabIndex: number
   openTab: (content: PaneContent) => void
   openInCurrentTab: (content: PaneContent) => void
+  /** ⌥ (Alt) target: open in the OTHER pane of the active tab, splitting if needed. */
+  openInOtherPane: (content: PaneContent) => void
+  /** Cmd+. — toggle split: duplicate the active pane / collapse to the active pane. */
+  splitPane: () => void
+  setActivePane: (index: number) => void
   closeTab: (id?: string) => void
   activateTab: (index: number) => void
   nextTab: () => void
@@ -40,7 +60,33 @@ interface TabsState {
   navForward: () => void
 }
 
-export const useTabsStore = create<TabsState>((set, get) => ({
+/** Content of the active pane of the active tab (zustand selector / imperative). */
+export function selectActiveContent(s: Pick<TabsState, 'tabs' | 'activeTabIndex'>): PaneContent | undefined {
+  const tab = s.tabs[s.activeTabIndex]
+  return tab?.panes[tab.activePane]?.content
+}
+
+export function getActiveContent(): PaneContent | undefined {
+  return selectActiveContent(useTabsStore.getState())
+}
+
+/** Open content according to a click/key modifier target. */
+export function openContent(content: PaneContent, target: 'self' | 'tab' | 'pane'): void {
+  const s = useTabsStore.getState()
+  if (target === 'tab') s.openTab(content)
+  else if (target === 'pane') s.openInOtherPane(content)
+  else s.openInCurrentTab(content)
+}
+
+function updateActiveTab(s: TabsState, update: (tab: Tab) => Tab): Pick<TabsState, 'tabs'> | TabsState {
+  const tab = s.tabs[s.activeTabIndex]
+  if (!tab) return s
+  const next = update(tab)
+  if (next === tab) return s
+  return { tabs: s.tabs.map((t, i) => (i === s.activeTabIndex ? next : t)) }
+}
+
+export const useTabsStore = create<TabsState>((set) => ({
   tabs: [makeTab({ kind: 'home' })],
   activeTabIndex: 0,
 
@@ -49,14 +95,54 @@ export const useTabsStore = create<TabsState>((set, get) => ({
   },
 
   openInCurrentTab(content) {
-    set((s) => {
-      const tab = s.tabs[s.activeTabIndex]
-      if (!tab) return s
-      if (JSON.stringify(tab.content) === JSON.stringify(content)) return s
-      const history = [...tab.history.slice(0, tab.historyIndex + 1), content].slice(-HISTORY_CAP)
-      const next: Tab = { ...tab, content, history, historyIndex: history.length - 1 }
-      return { tabs: s.tabs.map((t, i) => (i === s.activeTabIndex ? next : t)) }
-    })
+    set((s) =>
+      updateActiveTab(s, (tab) => {
+        const pane = tab.panes[tab.activePane]
+        if (!pane) return tab
+        const next = pushContent(pane, content)
+        if (next === pane) return tab
+        return { ...tab, panes: tab.panes.map((p, i) => (i === tab.activePane ? next : p)) }
+      })
+    )
+  },
+
+  openInOtherPane(content) {
+    set((s) =>
+      updateActiveTab(s, (tab) => {
+        if (tab.panes.length < 2) {
+          // Create the split with the new content in pane 2; keep focus where it is
+          // so list keyboard navigation can keep firing ⌥+Enter.
+          return { ...tab, panes: [...tab.panes, makePane(content)] }
+        }
+        const other = tab.activePane === 0 ? 1 : 0
+        const pane = tab.panes[other]!
+        const next = pushContent(pane, content)
+        if (next === pane) return tab
+        return { ...tab, panes: tab.panes.map((p, i) => (i === other ? next : p)) }
+      })
+    )
+  },
+
+  splitPane() {
+    set((s) =>
+      updateActiveTab(s, (tab) => {
+        if (tab.panes.length >= 2) {
+          // Collapse keeping the ACTIVE pane (its history survives).
+          return { ...tab, panes: [tab.panes[tab.activePane]!], activePane: 0 }
+        }
+        const pane = tab.panes[tab.activePane]!
+        // Duplicate the current content into pane 2 and focus it.
+        return { ...tab, panes: [pane, makePane(pane.content)], activePane: 1 }
+      })
+    )
+  },
+
+  setActivePane(index) {
+    set((s) =>
+      updateActiveTab(s, (tab) =>
+        index >= 0 && index < tab.panes.length && index !== tab.activePane ? { ...tab, activePane: index } : tab
+      )
+    )
   },
 
   closeTab(id) {
@@ -89,29 +175,39 @@ export const useTabsStore = create<TabsState>((set, get) => ({
   },
 
   navBack() {
-    set((s) => {
-      const tab = s.tabs[s.activeTabIndex]
-      if (!tab || tab.historyIndex === 0) return s
-      const historyIndex = tab.historyIndex - 1
-      const next: Tab = { ...tab, historyIndex, content: tab.history[historyIndex]! }
-      return { tabs: s.tabs.map((t, i) => (i === s.activeTabIndex ? next : t)) }
-    })
+    set((s) =>
+      updateActiveTab(s, (tab) => {
+        const pane = tab.panes[tab.activePane]
+        if (!pane || pane.historyIndex === 0) return tab
+        const historyIndex = pane.historyIndex - 1
+        const next: Pane = { ...pane, historyIndex, content: pane.history[historyIndex]! }
+        return { ...tab, panes: tab.panes.map((p, i) => (i === tab.activePane ? next : p)) }
+      })
+    )
   },
 
   navForward() {
-    set((s) => {
-      const tab = s.tabs[s.activeTabIndex]
-      if (!tab || tab.historyIndex >= tab.history.length - 1) return s
-      const historyIndex = tab.historyIndex + 1
-      const next: Tab = { ...tab, historyIndex, content: tab.history[historyIndex]! }
-      return { tabs: s.tabs.map((t, i) => (i === s.activeTabIndex ? next : t)) }
-    })
+    set((s) =>
+      updateActiveTab(s, (tab) => {
+        const pane = tab.panes[tab.activePane]
+        if (!pane || pane.historyIndex >= pane.history.length - 1) return tab
+        const historyIndex = pane.historyIndex + 1
+        const next: Pane = { ...pane, historyIndex, content: pane.history[historyIndex]! }
+        return { ...tab, panes: tab.panes.map((p, i) => (i === tab.activePane ? next : p)) }
+      })
+    )
   }
 }))
 
 // ── Session persistence: versioned blob in settings, restored on boot ─────────
 const SESSION_KEY = 'session.tabs'
-type SessionBlob = { v: 1; tabs: Tab[]; activeTabIndex: number }
+type SessionBlob = { v: 2; tabs: Tab[]; activeTabIndex: number }
+/** Pre-split shape (M2–M8) — upgraded on read, never written anymore. */
+type SessionBlobV1 = {
+  v: 1
+  tabs: { id: string; content: PaneContent; history: PaneContent[]; historyIndex: number }[]
+  activeTabIndex: number
+}
 
 const VALID_KINDS = new Set(['home', 'note', 'collection', 'search', 'trash'])
 
@@ -121,31 +217,66 @@ function isValidContent(c: unknown): c is PaneContent {
   return typeof k === 'string' && VALID_KINDS.has(k)
 }
 
+function isValidPane(p: unknown): p is Pane {
+  if (typeof p !== 'object' || p === null) return false
+  const pane = p as Partial<Pane>
+  return (
+    Array.isArray(pane.history) &&
+    pane.history.length > 0 &&
+    pane.history.every(isValidContent) &&
+    typeof pane.historyIndex === 'number' &&
+    pane.historyIndex >= 0 &&
+    pane.historyIndex < pane.history.length &&
+    isValidContent(pane.content)
+  )
+}
+
 function isValidSession(blob: unknown): blob is SessionBlob {
   if (typeof blob !== 'object' || blob === null) return false
   const b = blob as Partial<SessionBlob>
-  if (b.v !== 1 || !Array.isArray(b.tabs) || typeof b.activeTabIndex !== 'number') return false
+  if (b.v !== 2 || !Array.isArray(b.tabs) || typeof b.activeTabIndex !== 'number') return false
   return (
     b.tabs.length > 0 &&
     b.tabs.every(
       (t) =>
         typeof t?.id === 'string' &&
-        Array.isArray(t.history) &&
-        t.history.length > 0 &&
-        t.history.every(isValidContent) &&
-        typeof t.historyIndex === 'number' &&
-        t.historyIndex >= 0 &&
-        t.historyIndex < t.history.length &&
-        isValidContent(t.content)
+        Array.isArray(t.panes) &&
+        t.panes.length >= 1 &&
+        t.panes.length <= 2 &&
+        t.panes.every(isValidPane) &&
+        typeof t.activePane === 'number' &&
+        t.activePane >= 0 &&
+        t.activePane < t.panes.length
     )
   )
+}
+
+/**
+ * v1 → v2: wrap each tab's single content+history into panes[0]. Never throws:
+ * corrupt entries (null tabs, missing history, …) produce an invalid candidate
+ * that isValidSession rejects → the caller falls back to a fresh Home tab.
+ */
+function upgradeV1(blob: unknown): SessionBlob | null {
+  if (typeof blob !== 'object' || blob === null) return null
+  const b = blob as Partial<SessionBlobV1>
+  if (b.v !== 1 || !Array.isArray(b.tabs) || typeof b.activeTabIndex !== 'number') return null
+  const upgraded = {
+    v: 2,
+    tabs: b.tabs.map((t) => ({
+      id: String(t?.id ?? `tab-${nextTabId++}`),
+      panes: [{ content: t?.content, history: t?.history, historyIndex: t?.historyIndex }],
+      activePane: 0
+    })),
+    activeTabIndex: b.activeTabIndex
+  } as SessionBlob
+  return isValidSession(upgraded) ? upgraded : null
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 let persistenceInited = false
 
 function persistSession(s: Pick<TabsState, 'tabs' | 'activeTabIndex'>): void {
-  const blob: SessionBlob = { v: 1, tabs: s.tabs, activeTabIndex: s.activeTabIndex }
+  const blob: SessionBlob = { v: 2, tabs: s.tabs, activeTabIndex: s.activeTabIndex }
   void invoke('settings:set', { key: SESSION_KEY, value: blob })
 }
 
@@ -154,8 +285,9 @@ export async function initTabsPersistence(): Promise<void> {
   if (persistenceInited) return // StrictMode double-mount guard
   persistenceInited = true
   try {
-    const blob = await invoke('settings:get', { key: SESSION_KEY })
-    if (isValidSession(blob)) {
+    const raw = await invoke('settings:get', { key: SESSION_KEY })
+    const blob = isValidSession(raw) ? raw : upgradeV1(raw)
+    if (blob) {
       const activeTabIndex = Math.max(0, Math.min(blob.activeTabIndex, blob.tabs.length - 1))
       useTabsStore.setState({ tabs: blob.tabs, activeTabIndex })
       // Keep generated ids unique after restore.

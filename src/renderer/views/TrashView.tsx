@@ -32,7 +32,7 @@ export default function TrashView(): React.JSX.Element {
         {items.length > 0 && (
           <button
             onClick={() => void emptyTrash()}
-            className="rounded-md px-2.5 py-1 text-[12px] font-medium text-red-600 hover:bg-red-600/10"
+            className="rounded-md px-2.5 py-1 text-[12px] font-medium text-red-600 hover:bg-red-600/10 dark:text-red-400"
           >
             Empty Trash
           </button>
@@ -43,7 +43,7 @@ export default function TrashView(): React.JSX.Element {
       ) : (
         <div className="flex flex-col">
           {items.map((n) => (
-            <div key={n.id} className="group rounded-lg px-3 py-2 hover:bg-black/5">
+            <div key={n.id} className="group rounded-lg px-3 py-2 hover:bg-hover">
               <div className="flex items-baseline justify-between gap-3">
                 <span className="truncate text-[14px] font-medium">{n.title || 'Untitled'}</span>
                 <span className="shrink-0 text-[11px] text-ink-muted">
@@ -61,7 +61,7 @@ export default function TrashView(): React.JSX.Element {
                   </button>
                   <button
                     onClick={() => void deleteForever(n.id)}
-                    className="text-[11px] text-red-600 hover:underline"
+                    className="text-[11px] text-red-600 hover:underline dark:text-red-400"
                   >
                     Delete forever
                   </button>

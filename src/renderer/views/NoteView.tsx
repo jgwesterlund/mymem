@@ -8,6 +8,7 @@ import { useTabsStore } from '../stores/tabs'
 import { useUiStore, toast } from '../stores/ui'
 import Editor from '../editor/Editor'
 import CleanUpOverlay from '../editor/diff/CleanUpOverlay'
+import { FindBar } from '../editor/FindBar'
 import VersionHistoryModal from './VersionHistoryModal'
 import OrganizeModal from './OrganizeModal'
 
@@ -33,13 +34,32 @@ interface SaveState {
 
 type NoteWithRefs = Note & { collectionIds: string[]; pinned: boolean }
 
-export default function NoteView({ noteId }: { noteId: string }): React.JSX.Element {
+/**
+ * `focused` = this NoteView sits in the ACTIVE pane of the active tab. A split
+ * tab can mount TWO NoteViews (possibly on the SAME note), so everything that
+ * must fire exactly once per command — export/cleanup/find requests and the
+ * history/organize modals — is gated on it (only the focused pane responds).
+ */
+export default function NoteView({
+  noteId,
+  focused = true
+}: {
+  noteId: string
+  focused?: boolean
+}): React.JSX.Element {
   const [note, setNote] = useState<NoteWithRefs | null>(null)
   const [title, setTitle] = useState('')
   const [banner, setBanner] = useState<'conflict' | 'external' | null>(null)
   const [gone, setGone] = useState<'missing' | 'trashed' | null>(null)
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const [epoch, setEpoch] = useState(0)
+  // Live TipTap instance as React state (not just the save ref): the FindBar
+  // needs to re-render/re-attach when an epoch reload swaps the editor.
+  const [liveEditor, setLiveEditor] = useState<TipTapEditor | null>(null)
+  const [findOpen, setFindOpen] = useState(false)
+  // Bumped on every Cmd+F so an already-open FindBar refocuses its input.
+  const [findFocusSeq, setFindFocusSeq] = useState(0)
+  const [moreOpen, setMoreOpen] = useState(false) // the ⋯ menu (Save as template)
   // Base markdown of the open cleanup session (captured ONCE at open, post-flush);
   // null = overlay closed.
   const [cleanupBase, setCleanupBase] = useState<string | null>(null)
@@ -125,11 +145,15 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
   flushRef.current = flush
 
   // Menu File > Export routes here (the registry can't flush): flush, then export.
+  // Unfocused instances TRACK the counter but swallow the request (split tab,
+  // same note in both panes → exactly one export) — and never retro-fire it
+  // when they later gain focus.
   const exportRequest = useUiStore((s) => s.exportRequest)
   const lastExportReq = useRef(exportRequest)
   useEffect(() => {
     if (exportRequest === lastExportReq.current) return
     lastExportReq.current = exportRequest
+    if (!focused) return
     void flushRef.current().then(() =>
       invoke('notes:export', { id: noteId })
         .then((res) => {
@@ -137,19 +161,36 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
         })
         .catch(() => toast('Export failed'))
     )
-  }, [exportRequest, noteId])
+  }, [exportRequest, noteId, focused])
 
   // Clean Up (Cmd+Shift+U) routes here like export: flush the editor FIRST so
   // the session's base markdown matches the screen (and the post-accept reload
-  // finds a clean editor → silent, no banner).
+  // finds a clean editor → silent, no banner). Focused pane only (see export).
   const cleanupRequest = useUiStore((s) => s.cleanupRequest)
   const lastCleanupReq = useRef(cleanupRequest)
   useEffect(() => {
     if (cleanupRequest === lastCleanupReq.current) return
     lastCleanupReq.current = cleanupRequest
-    if (save.current.disabled) return
+    if (!focused || save.current.disabled) return
     void flushRef.current().then(() => setCleanupBase(currentMd() ?? save.current.lastMd))
-  }, [cleanupRequest, currentMd])
+  }, [cleanupRequest, currentMd, focused])
+
+  // Find in note (Cmd+F): the focused pane opens (or refocuses) its FindBar.
+  const findRequest = useUiStore((s) => s.findRequest)
+  const lastFindReq = useRef(findRequest)
+  useEffect(() => {
+    if (findRequest === lastFindReq.current) return
+    lastFindReq.current = findRequest
+    if (!focused || save.current.disabled) return
+    setFindOpen(true)
+    setFindFocusSeq((n) => n + 1)
+  }, [findRequest, focused])
+
+  const closeFind = useCallback((): void => {
+    setFindOpen(false)
+    const e = save.current.editor
+    if (e && !e.isDestroyed) e.commands.focus()
+  }, [])
 
   // While the overlay covers the editor it must not swallow keystrokes either:
   // ProseMirror keeps focus under an absolute cover, and autosave would persist
@@ -213,9 +254,15 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
     }
   }, [noteId, epoch])
 
-  // A history/organize modal left open must not follow the user to another tab/note.
+  // A history/organize modal left open must not follow the user to another
+  // tab/note. Focused instance only: when a split collapses, the UNFOCUSED
+  // co-mounted view (same noteId) unmounts too and must not close the modal
+  // the surviving pane is rendering.
+  const focusedRef = useRef(focused)
+  focusedRef.current = focused
   useEffect(() => {
     return () => {
+      if (!focusedRef.current) return
       const ui = useUiStore.getState()
       if (ui.historyNoteId === noteId) ui.closeHistory()
       if (ui.organizeNoteId === noteId) ui.closeOrganize()
@@ -258,7 +305,40 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
         setEpoch((e) => e + 1) // reload clears the gone state and re-enables saves
         return
       }
-      if (ev.origin === 'user') return
+      if (ev.origin === 'user') {
+        // TWO-PANE CASE (Cmd+. default = same note in both panes): pane A's
+        // autosave lands here in pane B as origin 'user'. The old blanket skip
+        // left pane B's CAS base permanently stale → first keystroke in pane B
+        // could only ever conflict. Instead, decide per INSTANCE:
+        //  - timer/inflight set → we are the saver (or have edits queued that
+        //    our own save pipeline will reconcile): skip — reloading would
+        //    remount the editor mid-typing;
+        //  - dirty → skip silently: the CAS guard surfaces the conflict banner
+        //    at save time (keep-mine / take-theirs via Reload);
+        //  - clean → check whether our base is stale. The saver's event finds
+        //    base === updatedAt (its save already adopted) → no-op; a clean
+        //    co-mounted view on the same note finds a newer updatedAt and
+        //    silently adopts the save (reload, exactly like an external write —
+        //    undo history resets by design).
+        const s = save.current
+        if (s.timer !== null || s.inflight !== null) return
+        if (isDirty()) return
+        void invoke('notes:get', { id: noteId })
+          .then((n) => {
+            if (n.updatedAt === save.current.base) return // our own (or already-adopted) save
+            if (cleanupBase !== null && !cleanupAccepting.current) {
+              // Same belt as below: the other pane rewrote the note under our
+              // open Clean Up overlay — its diff is stale, cancel it.
+              setCleanupBase(null)
+              toast('Note changed — Clean Up cancelled')
+            }
+            setEpoch((e) => e + 1)
+          })
+          .catch(() => {
+            // Fetch raced a trash/delete — the matching data:changed handles it.
+          })
+        return
+      }
       // Belt for the cleanup staleness guard: any non-user write landing while
       // the overlay is open invalidates its diff — close it (the unmount cancels
       // the session) instead of letting accept fail later. Accept's own push is
@@ -282,7 +362,7 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
         </p>
         <button
           onClick={() => useTabsStore.getState().closeTab()}
-          className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-black/5"
+          className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-hover"
         >
           Close tab
         </button>
@@ -299,7 +379,7 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       {banner && (
-        <div className="flex items-center justify-between border-b border-hairline bg-amber-100 px-4 py-1.5 text-[12px] text-amber-900">
+        <div className="flex items-center justify-between border-b border-hairline bg-amber-100 px-4 py-1.5 text-[12px] text-amber-900 dark:bg-amber-950 dark:text-amber-200">
           <span>
             {banner === 'conflict'
               ? 'Save conflict — this note changed elsewhere.'
@@ -315,7 +395,7 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
               }
               setEpoch((e) => e + 1)
             }}
-            className="rounded-md bg-amber-200 px-2 py-0.5 font-medium hover:bg-amber-300"
+            className="rounded-md bg-amber-200 px-2 py-0.5 font-medium hover:bg-amber-300 dark:bg-amber-900 dark:hover:bg-amber-800"
           >
             Reload
           </button>
@@ -363,6 +443,39 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
             >
               Export
             </button>
+            <div className="relative">
+              <button
+                title="More"
+                onClick={() => setMoreOpen((v) => !v)}
+                className="px-0.5 hover:text-ink"
+              >
+                ⋯
+              </button>
+              {moreOpen && (
+                <>
+                  {/* click-away layer under the menu */}
+                  <div className="fixed inset-0 z-40" onMouseDown={() => setMoreOpen(false)} />
+                  <div className="absolute right-0 top-5 z-50 w-44 rounded-lg border border-hairline bg-surface p-1 shadow-xl">
+                    <button
+                      onClick={() => {
+                        setMoreOpen(false)
+                        // Flush first: the template must capture what's on screen.
+                        void flushRef.current().then(() => {
+                          const md = currentMd() ?? save.current.lastMd
+                          return invoke('templates:create', {
+                            name: save.current.title.trim() || 'Untitled template',
+                            contentMd: md
+                          }).then((t) => toast(`Saved template “${t.name}”`))
+                        })
+                      }}
+                      className="w-full rounded-md px-2.5 py-1.5 text-left text-[12px] text-ink hover:bg-hover"
+                    >
+                      Save as template
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
         <div className="mt-4 flex min-h-0 flex-1 flex-col">
@@ -379,6 +492,7 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
               // is merely non-canonical (e.g. '* ' bullets) must not count as
               // dirty — an unedited note is never rewritten on flush.
               s.lastMd = currentMd() ?? s.lastMd
+              setLiveEditor(e) // the FindBar re-attaches to the new instance
             }}
             onDocChanged={(e) => {
               if (e !== save.current.editor) return // outgoing instance during an epoch reload
@@ -389,6 +503,9 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
           />
         </div>
       </div>
+      {findOpen && liveEditor && !liveEditor.isDestroyed && (
+        <FindBar editor={liveEditor} focusSeq={findFocusSeq} onClose={closeFind} />
+      )}
       {cleanupBase !== null && (
         <CleanUpOverlay
           noteId={noteId}
@@ -397,8 +514,12 @@ export default function NoteView({ noteId }: { noteId: string }): React.JSX.Elem
           onClose={() => setCleanupBase(null)}
         />
       )}
-      {organizeOpen && <OrganizeModal noteId={noteId} onClose={() => useUiStore.getState().closeOrganize()} />}
-      {historyOpen && (
+      {/* Modals mount in the FOCUSED pane only — a split tab showing the same
+          note in both panes must not render them twice. */}
+      {organizeOpen && focused && (
+        <OrganizeModal noteId={noteId} onClose={() => useUiStore.getState().closeOrganize()} />
+      )}
+      {historyOpen && focused && (
         <VersionHistoryModal
           noteId={noteId}
           currentMd={currentMd() ?? normalizeMd(note.contentMd)}

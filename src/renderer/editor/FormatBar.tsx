@@ -19,7 +19,7 @@ function Btn({
       title={title}
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      className={`rounded px-1.5 py-0.5 text-[12px] leading-5 ${active ? 'bg-accent/15 text-accent' : 'text-ink hover:bg-black/5'}`}
+      className={`rounded px-1.5 py-0.5 text-[12px] leading-5 ${active ? 'bg-accent/15 text-accent' : 'text-ink hover:bg-hover'}`}
     >
       {children}
     </button>

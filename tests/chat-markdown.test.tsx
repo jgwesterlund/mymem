@@ -60,7 +60,8 @@ describe('ChatMarkdown link handling', () => {
     })
     const tabs = useTabsStore.getState()
     const active = tabs.tabs[tabs.activeTabIndex]!
-    expect(active.content).toEqual({ kind: 'note', noteId: NOTE_ID })
+    // M9 pane shape: the citation opens in the ACTIVE pane of the active tab.
+    expect(active.panes[active.activePane]!.content).toEqual({ kind: 'note', noteId: NOTE_ID })
   })
 
   it('keeps external https links intact (target=_blank, href preserved)', async () => {

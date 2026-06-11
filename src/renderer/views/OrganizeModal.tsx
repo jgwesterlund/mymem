@@ -84,7 +84,7 @@ export default function OrganizeModal({
           {collections.map((c) => (
             <label
               key={c.id}
-              className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 hover:bg-black/5"
+              className="flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 hover:bg-hover"
             >
               <input
                 type="checkbox"
@@ -113,7 +113,7 @@ export default function OrganizeModal({
           />
           <button
             onClick={onClose}
-            className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-black/5"
+            className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-hover"
           >
             Cancel
           </button>

@@ -270,3 +270,68 @@ describe('NoteView save pipeline', () => {
     vi.unstubAllGlobals()
   })
 })
+
+/**
+ * M9 split panes: the SAME note can be open in both panes (the default Cmd+.
+ * state). Pane A's autosave reaches pane B as data:changed origin 'user' —
+ * the old blanket origin-user skip left pane B's CAS base permanently stale
+ * (first keystroke → unfixable conflict). The fix: a clean, stale instance
+ * silently adopts the save; the saver and dirty instances skip.
+ */
+describe('NoteView two-pane save adoption (origin user)', () => {
+  const getCalls = (): number => h.invokeCalls.filter((c) => c.channel === 'notes:get').length
+
+  it('a clean co-mounted view silently reloads when its base is stale', async () => {
+    let updatedAt = 100
+    h.invokeImpl = async (channel) => {
+      if (channel === 'notes:get') {
+        return noteFixture({ updatedAt, contentMd: updatedAt === 100 ? 'Hello.' : 'Hello from pane A.' })
+      }
+      throw new Error(`unexpected invoke: ${channel}`)
+    }
+    const { container } = await renderNoteView('n1')
+    updatedAt = 150 // pane A saved → newer updatedAt in the DB
+    await emitData({ entity: 'note', ids: ['n1'], op: 'update', origin: 'user' })
+    // get #2 = the staleness check, get #3 = the adopting epoch reload.
+    await waitUntil(() => getCalls() === 3)
+    await act(async () => {
+      await tick(20)
+    })
+    expect(container.textContent).not.toContain('Note changed elsewhere') // silent — no banner
+  })
+
+  it('the saving pane (base already current) checks but does not reload', async () => {
+    h.invokeImpl = async (channel) => {
+      if (channel === 'notes:get') return noteFixture() // updatedAt 100 === the view's base
+      throw new Error(`unexpected invoke: ${channel}`)
+    }
+    await renderNoteView('n1')
+    await emitData({ entity: 'note', ids: ['n1'], op: 'update', origin: 'user' })
+    await waitUntil(() => getCalls() === 2) // staleness check runs…
+    await act(async () => {
+      await tick(50)
+    })
+    expect(getCalls()).toBe(2) // …but no adopting reload (would clobber the cursor)
+  })
+
+  it('a dirty view skips entirely — the CAS guard decides at save time', async () => {
+    h.invokeImpl = async (channel) => {
+      if (channel === 'notes:get') return noteFixture()
+      if (channel === 'notes:update') return { updatedAt: 200 }
+      throw new Error(`unexpected invoke: ${channel}`)
+    }
+    const { root, container } = await renderNoteView('n1')
+    await act(async () => {
+      h.currentEditor!.commands.insertContent('local edits ') // pending debounce → dirty
+    })
+    await emitData({ entity: 'note', ids: ['n1'], op: 'update', origin: 'user' })
+    await act(async () => {
+      await tick(50)
+    })
+    expect(getCalls()).toBe(1) // no staleness fetch, no reload
+    expect(container.textContent).not.toContain('Note changed elsewhere') // and no banner
+    await act(async () => {
+      root.unmount() // flush the pending save inside the mocked pipeline
+    })
+  })
+})

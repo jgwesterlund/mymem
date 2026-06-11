@@ -1,7 +1,8 @@
 import type { CommandId } from '@shared/ipc'
 import { invoke, on } from '../api'
-import { useTabsStore } from '../stores/tabs'
+import { useTabsStore, getActiveContent } from '../stores/tabs'
 import { useChatStore } from '../stores/chat'
+import { useCollectionsStore } from '../stores/collections'
 import { useUiStore, toast } from '../stores/ui'
 
 /**
@@ -9,14 +10,14 @@ import { useUiStore, toast } from '../stores/ui'
  * menu:command pushes and dispatch into the stores. Commands whose feature
  * hasn't shipped yet toast instead of silently no-oping.
  */
-/** Commands that act on "the note" target the active tab's note. */
+/** Commands that act on "the note" target the ACTIVE PANE's note. */
 function activeNoteId(): string | null {
-  const s = useTabsStore.getState()
-  const content = s.tabs[s.activeTabIndex]?.content
+  const content = getActiveContent()
   return content?.kind === 'note' ? content.noteId : null
 }
 
-const handlers: Partial<Record<CommandId, () => void>> = {
+/** Exported for the keymap regression test: every CommandId must resolve here. */
+export const commandHandlers: Partial<Record<CommandId, () => void>> = {
   'new-note': () => {
     void invoke('notes:create', {}).then((note) => {
       useTabsStore.getState().openInCurrentTab({ kind: 'note', noteId: note.id })
@@ -38,6 +39,33 @@ const handlers: Partial<Record<CommandId, () => void>> = {
   'prev-tab': () => useTabsStore.getState().prevTab(),
   'nav-back': () => useTabsStore.getState().navBack(),
   'nav-forward': () => useTabsStore.getState().navForward(),
+  // Cmd+. — toggle split on the active tab.
+  'split-pane': () => useTabsStore.getState().splitPane(),
+  // Cmd+Shift+P — pin/unpin whatever the active pane shows (note or collection).
+  'toggle-pin': () => {
+    const content = getActiveContent()
+    const target =
+      content?.kind === 'note'
+        ? { itemType: 'note' as const, itemId: content.noteId }
+        : content?.kind === 'collection'
+          ? { itemType: 'collection' as const, itemId: content.collectionId }
+          : null
+    if (!target) {
+      toast('Open a note or collection to pin')
+      return
+    }
+    const pinned = useCollectionsStore
+      .getState()
+      .pins.some((p) => p.itemType === target.itemType && p.itemId === target.itemId)
+    void invoke('pins:set', { ...target, pinned: !pinned }).then(() =>
+      toast(pinned ? 'Unpinned' : 'Pinned to sidebar')
+    )
+  },
+  // Cmd+F — the focused NoteView opens its FindBar.
+  'find-in-note': () => {
+    if (activeNoteId()) useUiStore.getState().requestFind()
+    else toast('Open a note to find in it')
+  },
   'view-history': () => {
     const noteId = activeNoteId()
     if (noteId) useUiStore.getState().openHistory(noteId)
@@ -97,14 +125,14 @@ const handlers: Partial<Record<CommandId, () => void>> = {
 }
 
 for (let n = 1; n <= 9; n++) {
-  handlers[`activate-tab-${n}` as CommandId] = () => {
+  commandHandlers[`activate-tab-${n}` as CommandId] = () => {
     // Cmd+9 = last tab (macOS convention).
     useTabsStore.getState().activateTab(n === 9 ? -1 : n - 1)
   }
 }
 
 export function dispatchCommand(commandId: CommandId): void {
-  const handler = handlers[commandId]
+  const handler = commandHandlers[commandId]
   if (handler) handler()
   else toast('Not available yet')
 }

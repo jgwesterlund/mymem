@@ -21,6 +21,18 @@ mac:
   target:
     - dmg
     - zip
-  # Unsigned during development; signing + notarization wired up in M9.
+  # ── Signing / notarization (M9) ─────────────────────────────────────────────
+  # Unsigned local builds for now: identity stays null until John has an Apple
+  # Developer ID Application certificate in his keychain. To ship signed builds:
+  #   1. delete the `identity: null` line (electron-builder auto-discovers the
+  #      "Developer ID Application: …" identity from the keychain), and
+  #   2. flip `notarize: true`, with credentials in the environment:
+  #        export APPLE_ID="john.westerlund@cygnisec.com"
+  #        export APPLE_APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"   # appleid.apple.com → app-specific password
+  #        export APPLE_TEAM_ID="XXXXXXXXXX"
+  #      (electron-builder picks these up and staples the ticket automatically).
+  # hardenedRuntime is required for notarization and harmless unsigned.
   identity: null
+  notarize: false
+  hardenedRuntime: true
 npmRebuild: true

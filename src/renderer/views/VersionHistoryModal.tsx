@@ -16,11 +16,11 @@ const KIND_LABEL: Record<VersionKind, string> = {
 }
 
 const KIND_CLASS: Record<VersionKind, string> = {
-  session: 'bg-black/5 text-ink-muted',
-  pre_cleanup: 'bg-purple-500/10 text-purple-700',
-  pre_restore: 'bg-amber-500/10 text-amber-700',
-  import: 'bg-emerald-500/10 text-emerald-700',
-  ai_edit: 'bg-blue-500/10 text-blue-700'
+  session: 'bg-hover text-ink-muted',
+  pre_cleanup: 'bg-purple-500/10 text-purple-700 dark:text-purple-300',
+  pre_restore: 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
+  import: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+  ai_edit: 'bg-blue-500/10 text-blue-700 dark:text-blue-300'
 }
 
 function escapeHtml(s: string): string {
@@ -136,7 +136,7 @@ export default function VersionHistoryModal({
                   key={v.id}
                   onClick={() => setSelectedId(v.id)}
                   className={`flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left ${
-                    v.id === selectedId ? 'bg-accent/15' : 'hover:bg-black/5'
+                    v.id === selectedId ? 'bg-accent/15' : 'hover:bg-hover'
                   }`}
                 >
                   <span className="flex items-center gap-1.5">
@@ -177,7 +177,7 @@ export default function VersionHistoryModal({
                 <div className="flex items-center gap-2">
                   <button
                     onClick={onClose}
-                    className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-black/5"
+                    className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-hover"
                   >
                     Close
                   </button>

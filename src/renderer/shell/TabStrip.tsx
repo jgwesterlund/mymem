@@ -36,6 +36,7 @@ export function TabStrip(): React.JSX.Element {
     <div className="flex min-w-0 flex-1 items-center gap-1">
       {tabs.map((tab, i) => {
         const active = i === activeTabIndex
+        const activePane = tab.panes[tab.activePane] ?? tab.panes[0]!
         return (
           <div
             key={tab.id}
@@ -44,18 +45,21 @@ export function TabStrip(): React.JSX.Element {
               if (e.button === 1) useTabsStore.getState().closeTab(tab.id)
             }}
             className={`group flex min-w-0 max-w-44 cursor-default items-center gap-1 rounded-md px-2.5 py-1 text-[12px] ${
-              active ? 'bg-surface/70 font-medium text-ink shadow-sm' : 'text-ink-muted hover:bg-black/5'
+              active ? 'bg-surface/70 font-medium text-ink shadow-sm' : 'text-ink-muted hover:bg-wash'
             }`}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
-            <span className="truncate">{truncateMiddle(titleOf(tab.content))}</span>
+            <span className="truncate">
+              {tab.panes.length > 1 ? '◫ ' : ''}
+              {truncateMiddle(titleOf(activePane.content))}
+            </span>
             <button
               title="Close tab"
               onClick={(e) => {
                 e.stopPropagation()
                 useTabsStore.getState().closeTab(tab.id)
               }}
-              className={`shrink-0 rounded px-0.5 text-[11px] leading-none text-ink-muted hover:bg-black/10 hover:text-ink ${
+              className={`shrink-0 rounded px-0.5 text-[11px] leading-none text-ink-muted hover:bg-active hover:text-ink ${
                 active ? '' : 'invisible group-hover:visible'
               }`}
             >
@@ -67,7 +71,7 @@ export function TabStrip(): React.JSX.Element {
       <button
         title="New tab"
         onClick={() => useTabsStore.getState().openTab({ kind: 'home' })}
-        className="shrink-0 rounded-md px-2 py-1 text-[13px] leading-none text-ink-muted hover:bg-black/5"
+        className="shrink-0 rounded-md px-2 py-1 text-[13px] leading-none text-ink-muted hover:bg-hover"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         +

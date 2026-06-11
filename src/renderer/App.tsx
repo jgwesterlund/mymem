@@ -105,7 +105,7 @@ export default function App(): React.JSX.Element {
         <p className="text-[13px] text-ink-muted">myMem failed to start: {bootError}</p>
         <button
           onClick={() => window.location.reload()}
-          className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-black/5"
+          className="rounded-md border border-hairline px-2.5 py-1 text-[12px] font-medium hover:bg-hover"
         >
           Retry
         </button>

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
-import { on } from '../api'
+import type { Pin } from '@shared/types'
+import { invoke, on } from '../api'
 import { useCollectionsStore } from '../stores/collections'
 import { useNotesStore } from '../stores/notes'
-import { useTabsStore, type PaneContent } from '../stores/tabs'
+import { openContent, useTabsStore, selectActiveContent, type PaneContent } from '../stores/tabs'
+import { useUiStore } from '../stores/ui'
 import { dispatchCommand } from '../commands/registry'
 
 /** Small badge while the embedding backlog drains (index:progress phase 'embedding'). */
@@ -18,26 +20,32 @@ function IndexingBadge(): React.JSX.Element | null {
   )
   if (remaining === 0) return null
   return (
-    <div className="mx-2.5 mt-auto rounded-md bg-black/5 px-2 py-1 text-[11px] text-ink-muted">
+    <div className="mx-2.5 mt-auto rounded-md bg-hover px-2 py-1 text-[11px] text-ink-muted">
       Embedding {remaining} chunk{remaining === 1 ? '' : 's'}…
     </div>
   )
 }
 
+/** Open target per the app-wide modifier contract: ⌘ = new tab, ⌥ = other pane. */
+type OpenTarget = 'self' | 'tab' | 'pane'
+
 function NavItem({
   label,
   onClick,
-  active
+  active,
+  testId
 }: {
   label: string
-  onClick: (metaKey: boolean) => void
+  onClick: (target: OpenTarget) => void
   active?: boolean
+  testId?: string
 }): React.JSX.Element {
   return (
     <button
-      onClick={(e) => onClick(e.metaKey)}
+      data-testid={testId}
+      onClick={(e) => onClick(e.metaKey ? 'tab' : e.altKey ? 'pane' : 'self')}
       className={`w-full truncate rounded-md px-2.5 py-1 text-left text-[13px] ${
-        active ? 'bg-black/10 font-medium' : 'hover:bg-black/5'
+        active ? 'bg-active font-medium' : 'hover:bg-hover'
       }`}
     >
       {label}
@@ -45,18 +53,118 @@ function NavItem({
   )
 }
 
+/** Pinned notes/collections with HTML5 drag-reorder (pins:reorder, no new deps). */
+function PinnedList({
+  pins,
+  navigate
+}: {
+  pins: Pin[]
+  navigate: (content: PaneContent, target: OpenTarget) => void
+}): React.JSX.Element | null {
+  const collections = useCollectionsStore((s) => s.items)
+  const notes = useNotesStore((s) => s.items)
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [overIndex, setOverIndex] = useState<number | null>(null)
+
+  if (pins.length === 0) return null
+
+  const label = (p: Pin): string =>
+    p.itemType === 'note'
+      ? notes.find((n) => n.id === p.itemId)?.title || 'Untitled'
+      : collections.find((c) => c.id === p.itemId)?.name || 'Collection'
+
+  function drop(): void {
+    if (dragIndex === null || overIndex === null || dragIndex === overIndex) {
+      setDragIndex(null)
+      setOverIndex(null)
+      return
+    }
+    const next = [...pins]
+    const [moved] = next.splice(dragIndex, 1)
+    next.splice(overIndex, 0, moved!)
+    setDragIndex(null)
+    setOverIndex(null)
+    // Optimistic order; pins:reorder returns the canonical list via the store refresh.
+    useCollectionsStore.setState({ pins: next })
+    void invoke('pins:reorder', {
+      orderedKeys: next.map((p) => ({ itemType: p.itemType, itemId: p.itemId }))
+    }).then((canonical) => useCollectionsStore.setState({ pins: canonical }))
+  }
+
+  return (
+    <div>
+      <div className="px-2.5 pb-1 text-[11px] font-medium uppercase tracking-wide text-ink-muted">Pinned</div>
+      <nav className="flex flex-col gap-0.5">
+        {pins.map((p, i) => (
+          <div
+            key={`${p.itemType}:${p.itemId}`}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = 'move'
+              setDragIndex(i)
+            }}
+            onDragOver={(e) => {
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+              if (overIndex !== i) setOverIndex(i)
+            }}
+            onDrop={(e) => {
+              e.preventDefault()
+              drop()
+            }}
+            onDragEnd={() => {
+              setDragIndex(null)
+              setOverIndex(null)
+            }}
+            className={
+              dragIndex !== null && overIndex === i && overIndex !== dragIndex
+                ? overIndex < dragIndex
+                  ? 'border-t-2 border-accent'
+                  : 'border-b-2 border-accent'
+                : ''
+            }
+          >
+            <NavItem
+              label={label(p)}
+              onClick={(target) =>
+                navigate(
+                  p.itemType === 'note'
+                    ? { kind: 'note', noteId: p.itemId }
+                    : { kind: 'collection', collectionId: p.itemId },
+                  target
+                )
+              }
+            />
+          </div>
+        ))}
+      </nav>
+    </div>
+  )
+}
+
+function startSidebarResize(e: React.MouseEvent): void {
+  e.preventDefault()
+  const onMove = (ev: MouseEvent): void => {
+    useUiStore.getState().setSidebarWidth(ev.clientX)
+  }
+  const onUp = (): void => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
 export function Sidebar(): React.JSX.Element {
   const collections = useCollectionsStore((s) => s.items)
   const pins = useCollectionsStore((s) => s.pins)
-  const notes = useNotesStore((s) => s.items)
-  const activeContent = useTabsStore((s) => s.tabs[s.activeTabIndex]?.content)
+  const activeContent = useTabsStore(selectActiveContent)
+  const width = useUiStore((s) => s.sidebarWidth)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
 
-  function navigate(content: PaneContent, metaKey: boolean): void {
-    const tabs = useTabsStore.getState()
-    if (metaKey) tabs.openTab(content)
-    else tabs.openInCurrentTab(content)
+  function navigate(content: PaneContent, target: OpenTarget): void {
+    openContent(content, target)
   }
 
   async function createCollection(): Promise<void> {
@@ -65,25 +173,26 @@ export function Sidebar(): React.JSX.Element {
     setNewName('')
     if (!name) return
     const c = await useCollectionsStore.getState().create(name)
-    navigate({ kind: 'collection', collectionId: c.id }, false)
+    navigate({ kind: 'collection', collectionId: c.id }, 'self')
   }
 
-  const pinLabel = (itemType: 'note' | 'collection', itemId: string): string =>
-    itemType === 'note'
-      ? notes.find((n) => n.id === itemId)?.title || 'Untitled'
-      : collections.find((c) => c.id === itemId)?.name || 'Collection'
-
   return (
-    <aside className="flex w-60 shrink-0 flex-col gap-4 overflow-y-auto px-3 pb-4">
+    <aside style={{ width }} className="relative flex shrink-0 flex-col gap-4 overflow-y-auto px-3 pb-4">
+      <div
+        onMouseDown={startSidebarResize}
+        className="absolute inset-y-0 right-0 z-10 w-1 cursor-col-resize hover:bg-accent/40"
+      />
       <div className="flex flex-col gap-1.5">
         {/* Opens the Cmd+K search palette (same path as the menu accelerator). */}
         <button
+          data-testid="open-search"
           onClick={() => dispatchCommand('open-search')}
-          className="w-full rounded-md border border-hairline bg-black/5 px-2.5 py-1 text-left text-[12px] text-ink-muted"
+          className="w-full rounded-md border border-hairline bg-hover px-2.5 py-1 text-left text-[12px] text-ink-muted"
         >
           Search…&nbsp;&nbsp;⌘K
         </button>
         <button
+          data-testid="new-note"
           onClick={() => dispatchCommand('new-note')}
           className="w-full rounded-md bg-accent px-2.5 py-1 text-left text-[12px] font-medium text-white hover:opacity-90"
         >
@@ -94,37 +203,18 @@ export function Sidebar(): React.JSX.Element {
       <nav className="flex flex-col gap-0.5">
         <NavItem
           label="Home"
+          testId="nav-home"
           active={activeContent?.kind === 'home'}
-          onClick={(meta) => navigate({ kind: 'home' }, meta)}
+          onClick={(target) => navigate({ kind: 'home' }, target)}
         />
         <NavItem
           label="Trash"
           active={activeContent?.kind === 'trash'}
-          onClick={(meta) => navigate({ kind: 'trash' }, meta)}
+          onClick={(target) => navigate({ kind: 'trash' }, target)}
         />
       </nav>
 
-      {pins.length > 0 && (
-        <div>
-          <div className="px-2.5 pb-1 text-[11px] font-medium uppercase tracking-wide text-ink-muted">Pinned</div>
-          <nav className="flex flex-col gap-0.5">
-            {pins.map((p) => (
-              <NavItem
-                key={`${p.itemType}:${p.itemId}`}
-                label={pinLabel(p.itemType, p.itemId)}
-                onClick={(meta) =>
-                  navigate(
-                    p.itemType === 'note'
-                      ? { kind: 'note', noteId: p.itemId }
-                      : { kind: 'collection', collectionId: p.itemId },
-                    meta
-                  )
-                }
-              />
-            ))}
-          </nav>
-        </div>
-      )}
+      <PinnedList pins={pins} navigate={navigate} />
 
       <div>
         <div className="flex items-center justify-between px-2.5 pb-1">
@@ -132,7 +222,7 @@ export function Sidebar(): React.JSX.Element {
           <button
             title="New collection"
             onClick={() => setCreating(true)}
-            className="rounded px-1 text-[13px] leading-none text-ink-muted hover:bg-black/10"
+            className="rounded px-1 text-[13px] leading-none text-ink-muted hover:bg-active"
           >
             +
           </button>
@@ -143,7 +233,7 @@ export function Sidebar(): React.JSX.Element {
               key={c.id}
               label={`${c.name} (${c.noteCount})`}
               active={activeContent?.kind === 'collection' && activeContent.collectionId === c.id}
-              onClick={(meta) => navigate({ kind: 'collection', collectionId: c.id }, meta)}
+              onClick={(target) => navigate({ kind: 'collection', collectionId: c.id }, target)}
             />
           ))}
           {creating && (

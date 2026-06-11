@@ -17,5 +17,5 @@
       "@main/*": ["./src/main/*"]
     }
   },
-  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "electron.vite.config.ts"]
+  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "electron.vite.config.ts", "playwright.config.ts", "e2e/**/*"]
 }

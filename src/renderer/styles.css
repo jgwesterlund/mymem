@@ -11,6 +11,26 @@
   --color-ink-muted: #6f6f6a;
   --color-accent: #d96c47;
   --color-hairline: rgba(0, 0, 0, 0.08);
+  /* Interaction washes — ALWAYS use these instead of bg-black/5-style literals:
+     a black wash disappears (or worse, darkens text rows) on dark surfaces. */
+  --color-hover: rgba(0, 0, 0, 0.05);
+  --color-active: rgba(0, 0, 0, 0.1);
+}
+
+/* Dark theme (M9): .dark on <html> is driven by main's theme:changed push
+   (nativeTheme.shouldUseDarkColors), which follows Settings → General via
+   theme:set / nativeTheme.themeSource. Tailwind v4 utilities reference these
+   custom properties at runtime, so overriding them here re-skins every
+   token-based utility (bg-surface, text-ink, border-hairline, bg-hover, …). */
+.dark {
+  --color-surface: #262624;
+  --color-surface-dim: #1d1d1b;
+  --color-ink: #ebebe6;
+  --color-ink-muted: #a3a39b;
+  --color-accent: #e08660; /* slightly lifted for contrast on dark surfaces */
+  --color-hairline: rgba(255, 255, 255, 0.12);
+  --color-hover: rgba(255, 255, 255, 0.07);
+  --color-active: rgba(255, 255, 255, 0.14);
 }
 
 html,
@@ -130,7 +150,7 @@ body {
 .editor-prose code {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 0.88em;
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--color-hover); /* theme-aware wash, flips with .dark */
   border-radius: 4px;
   padding: 0.1em 0.3em;
 }
@@ -192,6 +212,16 @@ body {
   outline: 2px solid var(--color-accent);
 }
 
+/* Find in note (Cmd+F): FindInNote plugin decorations, FindBar UI in NoteView */
+.find-match {
+  background: color-mix(in srgb, var(--color-accent) 25%, transparent);
+  border-radius: 2px;
+}
+.find-match-current {
+  background: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  outline: 1px solid var(--color-accent);
+}
+
 /* FTS snippet highlight (SearchResultsView renders sanitized snippetHtml) */
 .search-snippet mark {
   background: color-mix(in srgb, var(--color-accent) 22%, transparent);
@@ -212,6 +242,14 @@ body {
   color: #b91c1c;
   text-decoration: line-through;
   border-radius: 3px;
+}
+.dark .version-diff ins {
+  background: rgba(96, 165, 250, 0.18);
+  color: #93c5fd;
+}
+.dark .version-diff del {
+  background: rgba(248, 113, 113, 0.14);
+  color: #fca5a5;
 }
 
 /* ── Chat (M7) ──────────────────────────────────────────────────────────────
@@ -244,7 +282,7 @@ body {
 .chat-markdown code {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 0.88em;
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--color-hover); /* theme-aware wash, flips with .dark */
   border-radius: 4px;
   padding: 0.1em 0.3em;
 }

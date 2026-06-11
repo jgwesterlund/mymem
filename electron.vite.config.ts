@@ -54,6 +54,9 @@ export default defineConfig({
     }
   },
   renderer: {
+    // Unique strict port: with the Vite default (5173, auto-fallback) a port grab
+    // by ANOTHER project's dev server can end up rendered inside myMem's window.
+    server: { port: 5183, strictPort: true },
     plugins: [react(), tailwindcss(), relaxCspForDev()],
     resolve: {
       alias: {

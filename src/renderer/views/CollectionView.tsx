@@ -4,7 +4,13 @@ import { invoke, on } from '../api'
 import { useCollectionsStore } from '../stores/collections'
 import { NoteList } from './NoteList'
 
-export default function CollectionView({ collectionId }: { collectionId: string }): React.JSX.Element {
+export default function CollectionView({
+  collectionId,
+  focused = true
+}: {
+  collectionId: string
+  focused?: boolean
+}): React.JSX.Element {
   const [items, setItems] = useState<NoteListItem[]>([])
   const collection = useCollectionsStore((s) => s.items.find((c) => c.id === collectionId))
 
@@ -24,7 +30,7 @@ export default function CollectionView({ collectionId }: { collectionId: string 
       <p className="mb-4 px-1 text-[12px] text-ink-muted">
         {items.length} {items.length === 1 ? 'note' : 'notes'}
       </p>
-      <NoteList items={items} empty="No notes in this collection yet — tag one with '#' in the editor." />
+      <NoteList items={items} focused={focused} empty="No notes in this collection yet — tag one with '#' in the editor." />
     </div>
   )
 }

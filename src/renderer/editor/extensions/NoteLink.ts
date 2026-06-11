@@ -9,9 +9,11 @@ import { createSuggestionRenderer } from '../suggestionUi'
  * back into a NoteLink node (chat citations, backlink extraction and the
  * editor all rely on this exact shape).
  */
+export type NavigateTarget = 'self' | 'tab' | 'pane'
+
 export interface NoteLinkOptions {
   /** Click navigation; null in headless/test builds. */
-  onNavigate: ((noteId: string, inNewTab: boolean) => void) | null
+  onNavigate: ((noteId: string, target: NavigateTarget) => void) | null
 }
 
 // Anchored at the suggestion-match position by the custom tokenizer below.
@@ -93,7 +95,7 @@ export const NoteLink = Node.create<NoteLinkOptions>({
         props: {
           handleClickOn(_view, _pos, node, _nodePos, event) {
             if (node.type.name !== name) return false
-            onNavigate(String(node.attrs.id), event.metaKey)
+            onNavigate(String(node.attrs.id), event.metaKey ? 'tab' : event.altKey ? 'pane' : 'self')
             return true
           }
         }

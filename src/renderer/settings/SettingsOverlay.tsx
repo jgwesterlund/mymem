@@ -1,21 +1,22 @@
 import { useEffect, useState } from 'react'
-import type { ModelChoice, ProviderStatus } from '@shared/types'
+import type { ModelChoice, ProviderStatus, Template } from '@shared/types'
 import { invoke, on } from '../api'
 import { useUiStore, toast } from '../stores/ui'
 import { useChatStore } from '../stores/chat'
 
 /**
  * Settings overlay (Cmd+,): a modal in the main window — deliberately NOT a
- * separate settings window (plan cut). Sections: General (placeholder),
- * AI (providers + default model + chat instructions), Data (index/embeddings).
+ * separate settings window (plan cut). Sections: General (theme),
+ * AI (providers + default model + chat instructions), Data (index/embeddings),
+ * Templates (CRUD; notes save into it via the ⋯ menu in NoteView).
  */
-type Section = 'general' | 'ai' | 'data'
+type Section = 'general' | 'ai' | 'data' | 'templates'
 
 function SectionButton({ id, label, active, onClick }: { id: Section; label: string; active: boolean; onClick: (id: Section) => void }): React.JSX.Element {
   return (
     <button
       onClick={() => onClick(id)}
-      className={`w-full rounded-md px-2.5 py-1.5 text-left text-[13px] ${active ? 'bg-black/10 font-medium' : 'text-ink-muted hover:bg-black/5'}`}
+      className={`w-full rounded-md px-2.5 py-1.5 text-left text-[13px] ${active ? 'bg-active font-medium' : 'text-ink-muted hover:bg-hover'}`}
     >
       {label}
     </button>
@@ -47,7 +48,7 @@ function OAuthCard({
           </p>
         </div>
         {provider.connected ? (
-          <button onClick={onLogout} className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-black/5">
+          <button onClick={onLogout} className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-hover">
             Disconnect
           </button>
         ) : busy ? (
@@ -55,7 +56,7 @@ function OAuthCard({
             <span className="text-[12px] text-ink-muted">Waiting…</span>
             <button
               onClick={onCancel}
-              className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-black/5"
+              className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-hover"
             >
               Cancel
             </button>
@@ -71,7 +72,7 @@ function OAuthCard({
             {provider.id === 'openai-codex' && (
               <button
                 onClick={() => onLogin('device_code')}
-                className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-black/5"
+                className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-hover"
               >
                 Device code
               </button>
@@ -85,7 +86,7 @@ function OAuthCard({
           <a href={deviceCode.verificationUrl} target="_blank" rel="noreferrer" className="font-medium text-accent underline">
             {deviceCode.verificationUrl}
           </a>{' '}
-          and enter code <code className="select-text rounded bg-black/10 px-1 font-mono">{deviceCode.userCode}</code>
+          and enter code <code className="select-text rounded bg-active px-1 font-mono">{deviceCode.userCode}</code>
         </div>
       )}
     </div>
@@ -107,7 +108,7 @@ function ApiKeyCard({ provider, onSaved }: { provider: ProviderStatus; onSaved: 
             onClick={() => {
               void invoke('oauth:logout', { provider: provider.id }).then(onSaved)
             }}
-            className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-black/5"
+            className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-hover"
           >
             Remove key
           </button>
@@ -135,12 +136,12 @@ function ApiKeyCard({ provider, onSaved }: { provider: ProviderStatus; onSaved: 
               } else setError(res.error ?? 'Invalid key')
             })
           }}
-          className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-black/5 disabled:opacity-50"
+          className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-hover disabled:opacity-50"
         >
           Save
         </button>
       </div>
-      {error && <p className="mt-1 text-[11px] text-red-700">{error}</p>}
+      {error && <p className="mt-1 text-[11px] text-red-700 dark:text-red-400">{error}</p>}
     </div>
   )
 }
@@ -207,7 +208,7 @@ function AiSection(): React.JSX.Element {
   return (
     <div className="flex flex-col gap-3">
       {!status.encryptionAvailable && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
           AI is disabled: macOS keychain encryption is unavailable, so credentials cannot be stored securely.
         </div>
       )}
@@ -292,6 +293,162 @@ function AiSection(): React.JSX.Element {
   )
 }
 
+type Theme = 'light' | 'dark' | 'system'
+
+function GeneralSection(): React.JSX.Element {
+  const [theme, setTheme] = useState<Theme>('system')
+  useEffect(() => {
+    void invoke('settings:get', { key: 'ui.theme' }).then((v) => {
+      if (v === 'light' || v === 'dark' || v === 'system') setTheme(v)
+    })
+  }, [])
+  return (
+    <div className="flex flex-col gap-3">
+      <div>
+        <p className="text-[12px] font-medium">Appearance</p>
+        <p className="text-[11px] text-ink-muted">
+          System follows macOS; Light/Dark force it for this app only.
+        </p>
+        <select
+          data-testid="theme-select"
+          value={theme}
+          onChange={(e) => {
+            const next = e.target.value as Theme
+            setTheme(next)
+            // theme:set (not settings:set): main also flips nativeTheme.themeSource,
+            // which re-skins the vibrancy material and pushes theme:changed → .dark.
+            void invoke('theme:set', { theme: next })
+          }}
+          className="mt-1 w-full rounded-md border border-hairline bg-surface px-2 py-1 text-[12px]"
+        >
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </div>
+      <div>
+        <p className="text-[12px] font-medium">Quick capture</p>
+        <p className="text-[11px] text-ink-muted">
+          ⌃⌘Space opens quick capture from anywhere — it works even with the window closed.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/** One template row: collapsed (name + actions) or expanded into an editor. */
+function TemplateRow({ t, onChanged }: { t: Template; onChanged: () => void }): React.JSX.Element {
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState(t.name)
+  const [contentMd, setContentMd] = useState(t.contentMd)
+  return (
+    <div className="rounded-lg border border-hairline px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        {editing ? (
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="min-w-0 flex-1 rounded-md border border-hairline bg-surface px-2 py-1 text-[12px] outline-none focus:border-accent/50"
+            style={{ userSelect: 'text' }}
+          />
+        ) : (
+          <p className="truncate text-[13px] font-medium">{t.name}</p>
+        )}
+        <div className="flex shrink-0 gap-1.5">
+          {editing ? (
+            <>
+              <button
+                onClick={() => {
+                  void invoke('templates:update', {
+                    id: t.id,
+                    patch: { name: name.trim() || t.name, contentMd }
+                  }).then(() => {
+                    setEditing(false)
+                    onChanged()
+                  })
+                }}
+                className="rounded-md bg-accent px-2.5 py-1 text-[12px] font-medium text-white hover:opacity-90"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => {
+                  setName(t.name)
+                  setContentMd(t.contentMd)
+                  setEditing(false)
+                }}
+                className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-hover"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => setEditing(true)}
+                className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-hover"
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => {
+                  if (!window.confirm(`Delete template “${t.name}”?`)) return
+                  void invoke('templates:delete', { id: t.id }).then(onChanged)
+                }}
+                className="rounded-md border border-hairline px-2.5 py-1 text-[12px] text-red-700 hover:bg-hover dark:text-red-400"
+              >
+                Delete
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      {editing && (
+        <textarea
+          value={contentMd}
+          onChange={(e) => setContentMd(e.target.value)}
+          rows={8}
+          placeholder="Template markdown…"
+          className="mt-2 w-full resize-none rounded-md border border-hairline bg-surface px-2 py-1.5 font-mono text-[12px] outline-none focus:border-accent/50"
+          style={{ userSelect: 'text' }}
+        />
+      )}
+    </div>
+  )
+}
+
+function TemplatesSection(): React.JSX.Element {
+  const [templates, setTemplates] = useState<Template[] | null>(null)
+  const refresh = (): void => {
+    void invoke('templates:list').then(setTemplates)
+  }
+  useEffect(refresh, [])
+  if (!templates) return <div />
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] text-ink-muted">
+          Save any note as a template via its ⋯ menu, or start one from scratch.
+        </p>
+        <button
+          onClick={() => {
+            void invoke('templates:create', { name: 'New template', contentMd: '' }).then(refresh)
+          }}
+          className="shrink-0 rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-hover"
+        >
+          New template
+        </button>
+      </div>
+      {templates.length === 0 && (
+        <p className="text-[12px] text-ink-muted">No templates yet.</p>
+      )}
+      {templates.map((t) => (
+        <TemplateRow key={`${t.id}:${t.updatedAt}`} t={t} onChanged={refresh} />
+      ))}
+    </div>
+  )
+}
+
 function DataSection(): React.JSX.Element {
   const [consent, setConsent] = useState(false)
   useEffect(() => {
@@ -323,7 +480,7 @@ function DataSection(): React.JSX.Element {
             void invoke('index:rebuild')
             toast('Rebuilding index…')
           }}
-          className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-black/5"
+          className="rounded-md border border-hairline px-2.5 py-1 text-[12px] hover:bg-hover"
         >
           Rebuild index
         </button>
@@ -358,13 +515,13 @@ export function SettingsOverlay(): React.JSX.Element | null {
           <SectionButton id="general" label="General" active={section === 'general'} onClick={setSection} />
           <SectionButton id="ai" label="AI" active={section === 'ai'} onClick={setSection} />
           <SectionButton id="data" label="Data" active={section === 'data'} onClick={setSection} />
+          <SectionButton id="templates" label="Templates" active={section === 'templates'} onClick={setSection} />
         </div>
         <div className="min-w-0 flex-1 overflow-y-auto p-4">
-          {section === 'general' && (
-            <p className="text-[12px] text-ink-muted">General settings arrive with M9 (theme, capture hotkey, templates).</p>
-          )}
+          {section === 'general' && <GeneralSection />}
           {section === 'ai' && <AiSection />}
           {section === 'data' && <DataSection />}
+          {section === 'templates' && <TemplatesSection />}
         </div>
       </div>
     </div>

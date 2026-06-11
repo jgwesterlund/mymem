@@ -10,9 +10,10 @@ import { UniqueID } from '@tiptap/extension-unique-id'
 import { common, createLowlight } from 'lowlight'
 import type { AnyExtension } from '@tiptap/core'
 import type { Template } from '@shared/types'
-import { NoteLink, NoteLinkSuggestion, type NoteLinkItem } from './NoteLink'
+import { NoteLink, NoteLinkSuggestion, type NavigateTarget, type NoteLinkItem } from './NoteLink'
 import { SlashCommand } from './SlashCommand'
 import { CollectionTagSuggestion, type CollectionTagItem } from './CollectionTag'
+import { FindInNote } from './findInNote'
 
 const lowlight = createLowlight(common)
 
@@ -47,7 +48,7 @@ const CodeBlockWithSafeFences = CodeBlockLowlight.extend({
  * specs, no suggestion menus, no UniqueID churn, no click navigation.
  */
 export interface EditorGlue {
-  onNavigateToNote: (noteId: string, inNewTab: boolean) => void
+  onNavigateToNote: (noteId: string, target: NavigateTarget) => void
   getNoteLinkItems: (query: string) => NoteLinkItem[] | Promise<NoteLinkItem[]>
   getTemplates: () => Promise<Template[]>
   getCollections: () => CollectionTagItem[]
@@ -79,6 +80,7 @@ export function buildExtensions(glue?: EditorGlue): AnyExtension[] {
 
   return [
     ...base,
+    FindInNote, // Cmd+F decorations (the FindBar UI lives in NoteView)
     Placeholder.configure({ placeholder: 'Write something…' }),
     // IDs anchor fold state/diffs/deep links later; they do NOT survive the
     // markdown round-trip (known plan constraint — no fold persistence).

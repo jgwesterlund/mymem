@@ -6,7 +6,14 @@ import { push } from './ipc/registry'
 import { buildAppMenu } from './menu'
 import { closeDb } from './db/connection'
 import { startApiServer, stopApiServer } from './api/server'
+import { runOnboarding } from './onboarding'
 import { runSmoke } from './smoke'
+
+// Test isolation (e2e): a private userData also gives the Playwright-launched
+// app its own single-instance lock, so tests run alongside a real myMem.
+if (process.env.MYMEM_USER_DATA) {
+  app.setPath('userData', process.env.MYMEM_USER_DATA)
+}
 
 // Smoke mode: verify native/ESM deps load inside Electron, then exit. No windows.
 if (process.env.MYMEM_SMOKE) {
@@ -26,14 +33,39 @@ if (process.env.MYMEM_SMOKE) {
         win.show()
         win.focus()
       } else {
-        createMainWindow()
+        openMainWindow()
       }
     })
+
+    const openMainWindow = (): void => {
+      const settings = getServices().settings
+      createMainWindow({
+        savedBounds: settings.get('window.bounds'),
+        onBoundsChange: (b) => settings.set('window.bounds', b)
+      })
+    }
 
     void app.whenReady().then(() => {
       registerIpcHandlers()
       buildAppMenu()
-      createMainWindow()
+
+      app.setAboutPanelOptions({
+        applicationName: 'myMem',
+        applicationVersion: app.getVersion(),
+        copyright: '© 2026 John Westerlund',
+        credits: 'Local-first AI notes — your notes never leave this Mac unless you chat about them.'
+      })
+
+      // Persisted theme before the window exists — no light flash on dark boots.
+      const savedTheme = getServices().settings.get('ui.theme')
+      if (savedTheme === 'light' || savedTheme === 'dark' || savedTheme === 'system') {
+        nativeTheme.themeSource = savedTheme
+      }
+
+      // First-run welcome notes (M9) — before the window so the first paint has them.
+      runOnboarding(getServices())
+
+      openMainWindow()
 
       // Local agent API (M6): unix socket in userData, same services as the UI.
       // A failed start must never take the app down — log and continue.
@@ -41,8 +73,9 @@ if (process.env.MYMEM_SMOKE) {
         console.error('[api] failed to start', err)
       })
 
-      // System appearance → renderer .dark class (initial push: did-finish-load
-      // in mainWindow.ts — full dark-mode QA stays M9).
+      // Appearance → renderer .dark class (initial push: did-finish-load in
+      // mainWindow.ts). Fires for system flips AND for theme:set writes to
+      // themeSource; the renderer only toggles a class, so no write-back loop.
       nativeTheme.on('updated', () => {
         push('theme:changed', { dark: nativeTheme.shouldUseDarkColors })
       })
@@ -54,7 +87,7 @@ if (process.env.MYMEM_SMOKE) {
     })
 
     app.on('activate', () => {
-      if (!getMainWindow()) createMainWindow()
+      if (!getMainWindow()) openMainWindow()
     })
 
     // mem-style: app lives until explicitly quit; quick capture works with the window closed.

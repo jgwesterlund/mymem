@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import type { Editor as TipTapEditor } from '@tiptap/core'
 import { invoke } from '../api'
-import { useTabsStore } from '../stores/tabs'
+import { openContent } from '../stores/tabs'
 import { useCollectionsStore } from '../stores/collections'
 import { toast } from '../stores/ui'
 import { buildExtensions, type EditorGlue } from './extensions'
@@ -21,10 +21,8 @@ export interface EditorProps {
 export default function Editor({ noteId, initialMd, onDocChanged, onEditorBlur, onReady }: EditorProps): React.JSX.Element {
   const extensions = useMemo(() => {
     const glue: EditorGlue = {
-      onNavigateToNote(targetId, inNewTab) {
-        const tabs = useTabsStore.getState()
-        if (inNewTab) tabs.openTab({ kind: 'note', noteId: targetId })
-        else tabs.openInCurrentTab({ kind: 'note', noteId: targetId })
+      onNavigateToNote(targetId, target) {
+        openContent({ kind: 'note', noteId: targetId }, target)
       },
       async getNoteLinkItems(query) {
         const hits = await invoke('search:typeahead', { q: query })

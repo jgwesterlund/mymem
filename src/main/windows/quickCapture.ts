@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from 'electron'
+import { app, BrowserWindow, screen } from 'electron'
 import { join } from 'node:path'
 
 /**
@@ -40,7 +40,9 @@ function createPanel(): BrowserWindow {
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   win.setAlwaysOnTop(true, 'screen-saver')
 
-  if (process.env.ELECTRON_RENDERER_URL) {
+  // app.isPackaged guard: a leaked ELECTRON_RENDERER_URL must never make a
+  // packaged build render some other dev server's app.
+  if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(`${process.env.ELECTRON_RENDERER_URL}/quick-capture.html`)
   } else {
     void win.loadFile(join(import.meta.dirname, '../renderer/quick-capture.html'))

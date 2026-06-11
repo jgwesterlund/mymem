@@ -12,7 +12,7 @@ function TabButton({ tab, label }: { tab: RightPanelTab; label: string }): React
     <button
       onClick={() => useUiStore.getState().setRightPanelTab(tab)}
       className={`rounded-md px-2.5 py-1 text-[12px] font-medium ${
-        active ? 'bg-black/10' : 'text-ink-muted hover:bg-black/5'
+        active ? 'bg-active' : 'text-ink-muted hover:bg-hover'
       }`}
     >
       {label}

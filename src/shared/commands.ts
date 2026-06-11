@@ -33,12 +33,12 @@ export const COMMANDS: Record<CommandId, CommandSpec> = {
   organize: { label: 'Organize…', accelerator: 'CmdOrCtrl+O', menu: 'note' },
   'auto-organize': { label: 'Auto-Organize', accelerator: 'CmdOrCtrl+Shift+O', menu: 'note' },
   'clean-up': { label: 'Clean Up', accelerator: 'CmdOrCtrl+Shift+U', menu: 'note' },
-  'toggle-pin': { label: 'Pin Note', menu: 'note' },
-  'find-in-note': { label: 'Find in Note…', menu: 'note' },
+  'toggle-pin': { label: 'Pin Note', accelerator: 'CmdOrCtrl+Shift+P', menu: 'note' },
+  'find-in-note': { label: 'Find in Note…', accelerator: 'CmdOrCtrl+F', menu: 'note' },
   'view-history': { label: 'Version History…', menu: 'note' },
 
   // ── Window ──
-  'split-pane': { label: 'Split Pane', menu: 'window' },
+  'split-pane': { label: 'Split Pane', accelerator: 'CmdOrCtrl+.', menu: 'window' },
   'next-tab': { label: 'Show Next Tab', accelerator: 'Ctrl+Tab', menu: 'window' },
   'prev-tab': { label: 'Show Previous Tab', accelerator: 'Ctrl+Shift+Tab', menu: 'window' },
   'activate-tab-1': { label: 'Tab 1', accelerator: 'CmdOrCtrl+1', menu: 'window' },

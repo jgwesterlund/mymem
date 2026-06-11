@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SearchResult } from '@shared/types'
 import { invoke, on } from '../api'
 import { useCollectionsStore } from '../stores/collections'
-import { useTabsStore } from '../stores/tabs'
+import { openContent } from '../stores/tabs'
 
 /** Only <mark> survives: escape everything, then resurrect the snippet's mark tags. */
 function snippetHtml(s: string): string {
@@ -88,10 +88,8 @@ export default function SearchResultsView({ query }: { query: string }): React.J
     }
   }, [run])
 
-  function openNote(noteId: string, inNewTab: boolean): void {
-    const tabs = useTabsStore.getState()
-    if (inNewTab) tabs.openTab({ kind: 'note', noteId })
-    else tabs.openInCurrentTab({ kind: 'note', noteId })
+  function openNote(noteId: string, e: React.MouseEvent): void {
+    openContent({ kind: 'note', noteId }, e.metaKey ? 'tab' : e.altKey ? 'pane' : 'self')
   }
 
   return (
@@ -132,7 +130,7 @@ export default function SearchResultsView({ query }: { query: string }): React.J
         <div className="flex shrink-0 overflow-hidden rounded-lg border border-hairline text-[12px]">
           <button
             onClick={() => switchMode('keyword')}
-            className={mode === 'keyword' ? 'bg-black/10 px-2.5 py-1.5 font-medium' : 'px-2.5 py-1.5 text-ink-muted'}
+            className={mode === 'keyword' ? 'bg-active px-2.5 py-1.5 font-medium' : 'px-2.5 py-1.5 text-ink-muted'}
           >
             Keyword
           </button>
@@ -142,7 +140,7 @@ export default function SearchResultsView({ query }: { query: string }): React.J
             onClick={() => switchMode('deep')}
             className={
               mode === 'deep'
-                ? 'bg-black/10 px-2.5 py-1.5 font-medium'
+                ? 'bg-active px-2.5 py-1.5 font-medium'
                 : `px-2.5 py-1.5 ${deepReady ? 'text-ink-muted' : 'text-ink-muted/50'}`
             }
           >
@@ -166,8 +164,8 @@ export default function SearchResultsView({ query }: { query: string }): React.J
           {results.map((r) => (
             <div
               key={r.noteId}
-              onClick={(e) => openNote(r.noteId, e.metaKey)}
-              className="group cursor-default rounded-lg px-3 py-2 hover:bg-black/5"
+              onClick={(e) => openNote(r.noteId, e)}
+              className="group cursor-default rounded-lg px-3 py-2 hover:bg-hover"
             >
               <div className="truncate text-[14px] font-medium">{r.title || 'Untitled'}</div>
               <div

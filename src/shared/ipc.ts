@@ -161,6 +161,10 @@ export interface IpcInvokeMap {
   // ── Settings ───────────────────────────────────────────────────────────────
   'settings:get': { args: [{ key: string }]; result: unknown }
   'settings:set': { args: [{ key: string; value: unknown }]; result: { ok: true } }
+  // Theme is a real channel (not a bare settings:set): main must also flip
+  // nativeTheme.themeSource, which drives both the vibrancy material and the
+  // theme:changed push that toggles the renderer's .dark class.
+  'theme:set': { args: [{ theme: 'light' | 'dark' | 'system' }]; result: { ok: true } }
 
   // ── Chat / AI (M7–M8) ─────────────────────────────────────────────────────
   'chat:send': {
@@ -244,7 +248,7 @@ export const INVOKE_CHANNELS = [
   'templates:list', 'templates:create', 'templates:update', 'templates:delete',
   'versions:list', 'versions:get', 'versions:restore',
   'search:typeahead', 'search:query', 'related:forNote', 'index:rebuild', 'embeddings:status',
-  'settings:get', 'settings:set',
+  'settings:get', 'settings:set', 'theme:set',
   'chat:send', 'chat:cancel', 'chats:list', 'chats:get', 'chats:delete', 'chat:saveAsNote',
   'ai:cleanup:start', 'ai:cleanup:refine', 'ai:cleanup:accept', 'ai:cleanup:cancel',
   'ai:autoOrganize', 'ai:undo', 'ai:models',
